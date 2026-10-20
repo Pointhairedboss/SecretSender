@@ -1,0 +1,17 @@
+{
+  "name": "secret-sender",
+  "version": "1.0.0",
+  "description": "Quantum-sealed one-time password & secret sharing web application with future reveal embargo, SMS handoff, and post-quantum browser decryption (powered by BitBop).",
+  "type": "module",
+  "main": "server.mjs",
+  "scripts": {
+    "start": "node server.mjs"
+  },
+  "dependencies": {
+    "mlkem": "^2.7.0"
+  },
+  "engines": {
+    "node": ">=20.0.0"
+  },
+  "license": "MIT"
+}

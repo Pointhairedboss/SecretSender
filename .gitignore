@@ -1,0 +1,4 @@
+node_modules/
+.env
+*.log
+zero_knowledge_s21_uat_report.json
