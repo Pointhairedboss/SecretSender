@@ -1,0 +1,182 @@
+{
+  "suite": "SecretSender Physical S21 Deterministic UAT",
+  "device": {
+    "serial": "R5CR60QL05P",
+    "model": "SM_G998B",
+    "chromeVersion": "Chrome/155.0.8059.84",
+    "viewport": {
+      "width": 412,
+      "height": 915
+    }
+  },
+  "completedAt": "2026-10-22T02:20:31.302Z",
+  "durationMs": 60094,
+  "summary": {
+    "total": 23,
+    "passed": 23,
+    "failed": 0
+  },
+  "results": [
+    {
+      "id": "UAT-LIV-01",
+      "area": "Area 1: Livery Tokens",
+      "description": "Theme Token Compliance & Computed Style Integrity",
+      "status": "PASS",
+      "durationMs": 425
+    },
+    {
+      "id": "UAT-LIV-02",
+      "area": "Area 1: Livery Tokens",
+      "description": "Official BitBop SVG Asset Delivery & MIME Conformance",
+      "status": "PASS",
+      "durationMs": 42
+    },
+    {
+      "id": "UAT-LIV-03",
+      "area": "Area 1: Livery Tokens",
+      "description": "Glider Grid Radial Pattern & Telemetry Scanner Line Animation",
+      "status": "PASS",
+      "durationMs": 6
+    },
+    {
+      "id": "UAT-VIEW-01",
+      "area": "Area 2: Mobile Viewport",
+      "description": "Physical S21 Admin View Zero Horizontal Overflow (412x915)",
+      "status": "PASS",
+      "durationMs": 344
+    },
+    {
+      "id": "UAT-VIEW-02",
+      "area": "Area 2: Mobile Viewport",
+      "description": "Physical S21 Claim View Zero Horizontal Overflow (412x915)",
+      "status": "PASS",
+      "durationMs": 717
+    },
+    {
+      "id": "UAT-VIEW-03",
+      "area": "Area 2: Mobile Viewport",
+      "description": "Small Mobile Viewport Boundaries (384x800)",
+      "status": "PASS",
+      "durationMs": 876
+    },
+    {
+      "id": "UAT-VIEW-04",
+      "area": "Area 2: Mobile Viewport",
+      "description": "Desktop Viewport Scaling & Shell Centering (1440x900)",
+      "status": "PASS",
+      "durationMs": 850
+    },
+    {
+      "id": "UAT-SEAL-01",
+      "area": "Area 3: Admin Sealing",
+      "description": "Immediate Admin Secret Sealing with Auto-Generated PIN",
+      "status": "PASS",
+      "durationMs": 1634
+    },
+    {
+      "id": "UAT-SEAL-02",
+      "area": "Area 3: Admin Sealing",
+      "description": "Custom PIN & Embargo Preset Sealing (+30s Demo)",
+      "status": "PASS",
+      "durationMs": 1234
+    },
+    {
+      "id": "UAT-SEAL-03",
+      "area": "Area 3: Admin Sealing",
+      "description": "Future Datetime-Local Picker Sealing (+48h Embargo)",
+      "status": "PASS",
+      "durationMs": 1072
+    },
+    {
+      "id": "UAT-SEAL-04",
+      "area": "Area 3: Admin Sealing",
+      "description": "Empty Secret Input Refusal & Zero-Network Guard",
+      "status": "PASS",
+      "durationMs": 596
+    },
+    {
+      "id": "UAT-TIME-01",
+      "area": "Area 4: Timelock Embargo",
+      "description": "Future Reveal Embargo Detection (HTTP 425 Too Early)",
+      "status": "PASS",
+      "durationMs": 1795
+    },
+    {
+      "id": "UAT-TIME-02",
+      "area": "Area 4: Timelock Embargo",
+      "description": "Final 24h Countdown Clock Formatting (HH:MM:SS)",
+      "status": "PASS",
+      "durationMs": 81
+    },
+    {
+      "id": "UAT-TIME-03",
+      "area": "Area 4: Timelock Embargo",
+      "description": "Automatic Reveal & Decrypt at 00:00:00 Countdown Expiry",
+      "status": "PASS",
+      "durationMs": 29478
+    },
+    {
+      "id": "UAT-AUTH-01",
+      "area": "Area 5: Wrong PIN 403",
+      "description": "Wrong Unlock Key (HTTP 403) Non-Burn Preservation",
+      "status": "PASS",
+      "durationMs": 1235
+    },
+    {
+      "id": "UAT-AUTH-02",
+      "area": "Area 5: Wrong PIN 403",
+      "description": "Subsequent Valid Unlock Following Wrong Key Attempt",
+      "status": "PASS",
+      "durationMs": 688
+    },
+    {
+      "id": "UAT-CRYPTO-01",
+      "area": "Area 6: Cryptographic Decapsulation",
+      "description": "Pure Browser ML-KEM-768 Decapsulation & AES-256-GCM Decryption",
+      "status": "PASS",
+      "durationMs": 2468
+    },
+    {
+      "id": "UAT-CRYPTO-02",
+      "area": "Area 6: Cryptographic Decapsulation",
+      "description": "Post-Quantum ML-DSA-44 Beacon Receipt Verification",
+      "status": "PASS",
+      "durationMs": 9
+    },
+    {
+      "id": "UAT-CRYPTO-03",
+      "area": "Area 6: Cryptographic Decapsulation",
+      "description": "Plaintext DOM Rendering & XSS Injection Immunization",
+      "status": "PASS",
+      "durationMs": 2558
+    },
+    {
+      "id": "UAT-BURN-01",
+      "area": "Area 7: 409 Burn-on-Read",
+      "description": "Burn-on-Read Replay Enforcement (HTTP 409 Conflict)",
+      "status": "PASS",
+      "durationMs": 1151
+    },
+    {
+      "id": "UAT-BURN-02",
+      "area": "Area 7: 409 Burn-on-Read",
+      "description": "Claim Page Direct Load on Burned Escrow (Probe 409)",
+      "status": "PASS",
+      "durationMs": 459
+    },
+    {
+      "id": "UAT-NET-01",
+      "area": "Area 8: Network Isolation",
+      "description": "Zero App-Server Requests During Recipient Claim",
+      "status": "PASS",
+      "durationMs": 2498
+    },
+    {
+      "id": "UAT-SMS-01",
+      "area": "Area 8: Network Isolation",
+      "description": "Native SMS Handoff Link Formatting & Payload Encoding",
+      "status": "PASS",
+      "durationMs": 1211
+    }
+  ]
+}

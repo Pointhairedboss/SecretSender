@@ -1,0 +1,477 @@
+{
+  "persona": "happy-path",
+  "completedAt": "2026-10-22T02:21:47.177Z",
+  "stepsExecuted": 6,
+  "deadClicks": [],
+  "viewportOverflowSteps": [],
+  "steps": [
+    {
+      "step": 1,
+      "decision": {
+        "thought": "Enter secure password into secret input field",
+        "action": "type",
+        "selector": "#secret",
+        "text": "HappyPathQuantumSecret99",
+        "expectedOutcome": "Secret input populated"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635704039,
+          "type": "action",
+          "name": "input",
+          "target": "#secret",
+          "payload": {
+            "type": "text",
+            "valueLength": 24
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/happy-path/step-01.png"
+    },
+    {
+      "step": 2,
+      "decision": {
+        "thought": "Click Seal & Create Share Link button",
+        "action": "click",
+        "selector": "#seal-btn",
+        "expectedOutcome": "Secret sealed and confirmation card rendered"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "claim",
+        "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635704771,
+          "type": "action",
+          "name": "click",
+          "target": "#seal-btn",
+          "payload": {
+            "text": "Seal & Create Share Link"
+          }
+        },
+        {
+          "t": 1792635704771,
+          "type": "hold",
+          "id": "seal",
+          "on": true,
+          "why": "Admin sealing secret via BitBop"
+        },
+        {
+          "t": 1792635705003,
+          "type": "network",
+          "method": "POST",
+          "url": "/api/share",
+          "status": 200,
+          "ok": true,
+          "ms": 232
+        },
+        {
+          "t": 1792635705004,
+          "type": "state",
+          "label": "secret_sealed",
+          "summary": {
+            "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+            "unlockKey": "30a2a4d5"
+          }
+        },
+        {
+          "t": 1792635705005,
+          "type": "hold",
+          "id": "seal",
+          "on": false,
+          "heldMs": 234,
+          "why": "Admin sealing secret via BitBop"
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/happy-path/step-02.png"
+    },
+    {
+      "step": 3,
+      "decision": {
+        "thought": "Navigate to Claim view using newly minted escrow ID",
+        "action": "navigate",
+        "url": "http://localhost:5179/?escrow_id=e64064d3-258d-4a56-bc29-280072ee4d64&uat=1",
+        "expectedOutcome": "Claim view loaded on device"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "claim",
+        "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "claim",
+        "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [],
+      "screenshot": "logs/uat/screenshots/happy-path/step-03.png"
+    },
+    {
+      "step": 4,
+      "decision": {
+        "thought": "Enter Unlock Key / PIN into input field",
+        "action": "type",
+        "selector": "#unlock",
+        "text": "30a2a4d5",
+        "expectedOutcome": "Unlock Key field populated"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "claim",
+        "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "claim",
+        "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635706627,
+          "type": "action",
+          "name": "input",
+          "target": "#unlock",
+          "payload": {
+            "type": "text",
+            "valueLength": 8
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/happy-path/step-04.png"
+    },
+    {
+      "step": 5,
+      "decision": {
+        "thought": "Click Reveal / Decrypt button to decapsulate ML-KEM-768 and decrypt",
+        "action": "click",
+        "selector": "#reveal-btn",
+        "expectedOutcome": "Plaintext secret rendered in DOM"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "claim",
+        "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "claim",
+        "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": true,
+        "burned": true,
+        "error": null,
+        "secretPlaintext": "HappyPathQuantumSecret99"
+      },
+      "newEvents": [
+        {
+          "t": 1792635707282,
+          "type": "action",
+          "name": "click",
+          "target": "#reveal-btn",
+          "payload": {
+            "text": "Reveal / Decrypt"
+          }
+        },
+        {
+          "t": 1792635707283,
+          "type": "hold",
+          "id": "reveal",
+          "on": true,
+          "why": "Direct browser decapsulation & reveal"
+        },
+        {
+          "t": 1792635707427,
+          "type": "network",
+          "method": "POST",
+          "url": "https://api.bitbop.dev/escrow/reveal",
+          "status": 200,
+          "ok": true,
+          "ms": 130
+        },
+        {
+          "t": 1792635707438,
+          "type": "state",
+          "label": "secret_revealed",
+          "summary": {
+            "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+            "secretLength": 24
+          }
+        },
+        {
+          "t": 1792635707547,
+          "type": "network",
+          "method": "POST",
+          "url": "https://api.bitbop.dev/verify",
+          "status": 200,
+          "ok": true,
+          "ms": 109
+        },
+        {
+          "t": 1792635707549,
+          "type": "hold",
+          "id": "reveal",
+          "on": false,
+          "heldMs": 266,
+          "why": "Direct browser decapsulation & reveal"
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/happy-path/step-05.png"
+    },
+    {
+      "step": 6,
+      "decision": {
+        "thought": "Plaintext secret revealed and verified with ML-DSA-44. Workflow complete.",
+        "action": "done",
+        "expectedOutcome": "Happy path finished successfully"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "screenshot": "logs/uat/screenshots/happy-path/step-06.png"
+    }
+  ],
+  "flightRecorder": {
+    "format": "web-uat/1",
+    "savedAt": "2026-10-22T02:21:48.279Z",
+    "url": "http://localhost:5179/?escrow_id=e64064d3-258d-4a56-bc29-280072ee4d64&uat=1",
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36",
+    "viewport": {
+      "width": 320,
+      "height": 584
+    },
+    "state": {
+      "view": "claim",
+      "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+      "timelockActive": false,
+      "remainingSeconds": null,
+      "revealed": true,
+      "burned": true,
+      "error": null,
+      "secretPlaintext": "HappyPathQuantumSecret99"
+    },
+    "summary": {
+      "minutes": 0,
+      "actions": 3,
+      "networkCalls": 3,
+      "networkStatuses": {
+        "200": 2,
+        "403": 1
+      },
+      "errors": 0,
+      "holds": {
+        "count": 2,
+        "maxMs": 266
+      }
+    },
+    "events": [
+      {
+        "t": 1792635705772,
+        "type": "action",
+        "name": "navigation",
+        "target": "http://localhost:5179/?escrow_id=e64064d3-258d-4a56-bc29-280072ee4d64&uat=1",
+        "payload": {
+          "view": "claim",
+          "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64"
+        }
+      },
+      {
+        "t": 1792635705773,
+        "type": "hold",
+        "id": "probe",
+        "on": true,
+        "why": "Probing escrow status on load"
+      },
+      {
+        "t": 1792635705905,
+        "type": "network",
+        "method": "POST",
+        "url": "https://api.bitbop.dev/escrow/reveal",
+        "status": 403,
+        "ok": false,
+        "ms": 120
+      },
+      {
+        "t": 1792635705907,
+        "type": "hold",
+        "id": "probe",
+        "on": false,
+        "heldMs": 134,
+        "why": "Probing escrow status on load"
+      },
+      {
+        "t": 1792635706627,
+        "type": "action",
+        "name": "input",
+        "target": "#unlock",
+        "payload": {
+          "type": "text",
+          "valueLength": 8
+        }
+      },
+      {
+        "t": 1792635707282,
+        "type": "action",
+        "name": "click",
+        "target": "#reveal-btn",
+        "payload": {
+          "text": "Reveal / Decrypt"
+        }
+      },
+      {
+        "t": 1792635707283,
+        "type": "hold",
+        "id": "reveal",
+        "on": true,
+        "why": "Direct browser decapsulation & reveal"
+      },
+      {
+        "t": 1792635707427,
+        "type": "network",
+        "method": "POST",
+        "url": "https://api.bitbop.dev/escrow/reveal",
+        "status": 200,
+        "ok": true,
+        "ms": 130
+      },
+      {
+        "t": 1792635707438,
+        "type": "state",
+        "label": "secret_revealed",
+        "summary": {
+          "escrowId": "e64064d3-258d-4a56-bc29-280072ee4d64",
+          "secretLength": 24
+        }
+      },
+      {
+        "t": 1792635707547,
+        "type": "network",
+        "method": "POST",
+        "url": "https://api.bitbop.dev/verify",
+        "status": 200,
+        "ok": true,
+        "ms": 109
+      },
+      {
+        "t": 1792635707549,
+        "type": "hold",
+        "id": "reveal",
+        "on": false,
+        "heldMs": 266,
+        "why": "Direct browser decapsulation & reveal"
+      }
+    ]
+  }
+}

@@ -15,6 +15,45 @@ let activeApiKey = process.env.BITBOP_API_KEY ? process.env.BITBOP_API_KEY.trim(
 
 const MLKEM_BROWSER_BUNDLE = fs.readFileSync(path.join(__dirname, 'mlkem.browser.js'), 'utf8');
 
+const PUBLIC_DIR = path.join(__dirname, 'public');
+const BADGES_DIR = path.join(PUBLIC_DIR, 'badges');
+
+// In-memory cache for static SVG assets: path -> Buffer
+const SVG_CACHE = new Map();
+
+function getCachedSvg(filePath) {
+  if (SVG_CACHE.has(filePath)) {
+    return SVG_CACHE.get(filePath);
+  }
+  if (!fs.existsSync(filePath)) return null;
+  const stat = fs.statSync(filePath);
+  if (!stat.isFile()) return null;
+  const buf = fs.readFileSync(filePath);
+  SVG_CACHE.set(filePath, buf);
+  return buf;
+}
+
+function serveSvgBuffer(req, res, buf) {
+  if (req.method !== 'GET' && req.method !== 'HEAD') {
+    res.writeHead(405, {
+      'Content-Type': 'text/plain; charset=utf-8',
+      'Allow': 'GET, HEAD',
+    });
+    res.end('Method not allowed');
+    return;
+  }
+  res.writeHead(200, {
+    'Content-Type': 'image/svg+xml; charset=utf-8',
+    'Cache-Control': 'public, max-age=86400',
+    'Content-Length': buf.length,
+  });
+  if (req.method === 'HEAD') {
+    res.end();
+  } else {
+    res.end(buf);
+  }
+}
+
 /**
  * Self-provisions a Free Tier BitBop API key (500 req/day, 60-day TTL) via ML-KEM-768
  * if BITBOP_API_KEY is not provided in the environment.
@@ -186,252 +225,535 @@ function buildHtml() {
 <html lang="en">
 <head>
 <meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
+<meta name="viewport" content="width=device-width, initial-scale=1, viewport-fit=cover">
 <title>SecretSender — Quantum-Sealed One-Time Secrets</title>
+<link rel="icon" type="image/svg+xml" href="/favicon.svg">
+<link rel="preconnect" href="https://fonts.googleapis.com">
+<link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+<link href="https://fonts.googleapis.com/css2?family=Space+Grotesk:wght@500;600;700;800&family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600;700;800&display=swap" rel="stylesheet" crossorigin="anonymous">
 <style>
-  * { box-sizing: border-box; }
+  :root {
+    --color-surface: #0F1012;
+    --color-surface-container-lowest: #0B0C0E;
+    --color-surface-container-low: #16181D;
+    --color-surface-container: #1B1E24;
+    --color-surface-container-high: #21252D;
+    --color-surface-container-highest: #282D37;
+    --color-outline-variant: #262932;
+    --color-border-subtle: #1E2028;
+    --color-primary-container: #FFD600;
+    --color-primary-fixed: #FFE14D;
+    --color-primary-fixed-dim: #E6C000;
+    --color-on-primary: #1A1600;
+    --color-emerald-telemetry: #10B981;
+    --color-emerald-dark: #062419;
+    --color-emerald-light: #34D399;
+    --color-error: #F87171;
+    --color-error-container: #7F1D1D;
+    --color-warning: #FBBF24;
+    --color-on-surface: #F1F5F9;
+    --color-on-surface-variant: #CBD5E1;
+    --color-outline: #94A3B8;
+  }
+
+  * {
+    box-sizing: border-box;
+  }
+  *::before, *::after {
+    box-sizing: border-box;
+  }
+
+  html {
+    color-scheme: dark;
+    background-color: #0F1012;
+    -webkit-text-size-adjust: 100%;
+  }
+
   body {
-    font-family: system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+    font-family: 'Inter', system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
     margin: 0;
-    padding: 16px;
-    background: #0B0C0E;
-    color: #F1F5F9;
-    max-width: 500px;
-    margin-left: auto;
-    margin-right: auto;
+    padding: 20px 12px;
+    background-color: #0F1012;
+    color: #CBD5E1;
     min-height: 100vh;
     display: flex;
     flex-direction: column;
-    justify-content: space-between;
+    align-items: center;
+    justify-content: flex-start;
+    overflow-x: hidden;
+    position: relative;
+    line-height: 1.5;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
   }
+
+  /* Fixed Glider Grid Radial Dot Pattern */
+  .glider-grid {
+    position: fixed;
+    inset: 0;
+    background-image: radial-gradient(circle, #262932 1px, transparent 1px);
+    background-size: 24px 24px;
+    opacity: 0.35;
+    pointer-events: none;
+    z-index: 0;
+  }
+
+  /* Application Shell Card */
   .shell {
-    background: #14161B;
+    position: relative;
+    width: 100%;
+    max-width: 480px;
+    background: #16181D;
+    background-color: #16181D;
     border: 1px solid #262932;
-    border-radius: 12px;
-    padding: 20px;
-    box-shadow: 0 12px 32px rgba(0,0,0,0.45);
+    border-color: #262932;
+    border-radius: 14px;
+    padding: 24px 20px;
+    box-shadow: 0 16px 40px rgba(0, 0, 0, 0.6), 0 0 0 1px rgba(255, 255, 255, 0.03);
+    overflow: hidden;
+    z-index: 1;
+  }
+
+  /* Telemetry Scanner Line */
+  .scanner-line {
+    position: absolute;
+    top: 0;
+    left: 0;
+    width: 100%;
+    height: 2px;
+    background: #10B981;
+    background-color: #10B981;
+    box-shadow: 0 0 14px #10B981;
+    opacity: 0.6;
+    pointer-events: none;
+    z-index: 10;
+    animation: scan 8s linear infinite;
+  }
+  @keyframes scan {
+    0% { top: 0; opacity: 0.8; }
+    50% { opacity: 1; }
+    100% { top: 100%; opacity: 0.8; }
+  }
+
+  /* Header Branding */
+  .brand-header {
+    margin-bottom: 20px;
+    padding-bottom: 16px;
+    border-bottom: 1px solid #1E2028;
+  }
+  .brand-top-row {
+    display: flex;
+    justify-content: space-between;
+    align-items: center;
+    margin-bottom: 12px;
+  }
+  .brand-wordmark-link {
+    display: inline-block;
+    line-height: 0;
+    text-decoration: none;
+  }
+  .brand-wordmark {
+    width: 190px;
+    height: 40px;
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+  .header-status-badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 6px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    font-weight: 700;
+    letter-spacing: 0.08em;
+    color: #10B981;
+    background: #062419;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    padding: 3px 8px;
+    border-radius: 9999px;
   }
   .eyebrow {
     display: inline-flex;
     align-items: center;
     gap: 6px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 11px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10.5px;
+    font-weight: 600;
     text-transform: uppercase;
     letter-spacing: 0.08em;
     color: #10B981;
     background: #062419;
-    border: 1px solid rgba(16,185,129,0.35);
-    padding: 4px 8px;
-    border-radius: 4px;
-    margin-bottom: 10px;
+    border: 1px solid rgba(16, 185, 129, 0.35);
+    padding: 4px 10px;
+    border-radius: 6px;
   }
+  .beacon-pip {
+    width: 6px;
+    height: 6px;
+    border-radius: 50%;
+    background: #10B981;
+    background-color: #10B981;
+    box-shadow: 0 0 8px #10B981;
+    display: inline-block;
+    flex-shrink: 0;
+    animation: pulse 2s cubic-bezier(0.4, 0, 0.6, 1) infinite;
+  }
+  @keyframes pulse {
+    0%, 100% { opacity: 1; transform: scale(1); }
+    50% { opacity: 0.45; transform: scale(0.85); }
+  }
+
+  /* Typography */
   h1 {
-    font-size: 1.45rem;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
+    font-size: 1.5rem;
     font-weight: 800;
-    margin: 0 0 6px;
     letter-spacing: -0.02em;
-    color: #F8FAFC;
+    color: #F1F5F9;
+    margin: 12px 0 6px;
   }
   .sub {
     color: #94A3B8;
     font-size: 0.88rem;
-    margin: 0 0 16px;
+    margin: 0 0 18px;
     line-height: 1.45;
   }
   label {
     display: block;
     margin: 14px 0 6px;
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 0.78rem;
-    font-weight: 600;
+    font-weight: 700;
     text-transform: uppercase;
-    letter-spacing: 0.05em;
+    letter-spacing: 0.06em;
     color: #94A3B8;
   }
+
+  /* Form Inputs */
   input[type="text"], input[type="datetime-local"] {
     width: 100%;
-    padding: 12px;
-    font-size: 15px;
+    max-width: 100%;
+    padding: 12px 14px;
+    font-family: 'Inter', system-ui, sans-serif;
+    font-size: 14.5px;
     border: 1px solid #262932;
     border-radius: 8px;
     background: #0B0C0E;
-    color: #F8FAFC;
+    color: #F1F5F9;
     outline: none;
+    transition: border-color 0.15s ease, box-shadow 0.15s ease;
+  }
+  input[type="text"]#secret,
+  input[type="text"]#pin,
+  input[type="text"]#unlock {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 14px;
+  }
+  input[type="text"]::placeholder {
+    color: #64748B;
   }
   input[type="text"]:focus, input[type="datetime-local"]:focus {
-    border-color: #10B981;
+    border-color: #FFD600;
   }
+
+  /* Focus Visible Global Outline */
+  a:focus-visible,
+  button:focus-visible,
+  input:focus-visible,
+  select:focus-visible,
+  textarea:focus-visible,
+  [tabindex]:focus-visible {
+    outline: 2px solid #FFD600 !important;
+    outline-offset: 4px !important;
+  }
+
+  /* Presets Bar */
   .presets {
     display: flex;
     flex-wrap: wrap;
     gap: 6px;
     margin-top: 8px;
+    width: 100%;
   }
   .preset-btn {
-    width: auto;
-    margin-top: 0;
+    flex: 0 1 auto;
+    white-space: nowrap;
     padding: 6px 10px;
-    font-size: 12px;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    background: #1E222B;
-    color: #CBD5E1;
-    border: 1px solid #2E3440;
+    font-size: 11.5px;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-weight: 600;
+    background: #1B1E24;
+    color: #94A3B8;
+    border: 1px solid #262932;
     border-radius: 6px;
     cursor: pointer;
+    transition: all 0.15s ease;
+  }
+  .preset-btn:hover:not(.active) {
+    background: #21252D;
+    color: #F1F5F9;
+    border-color: #FFD600;
   }
   .preset-btn.active {
     background: #062419;
     color: #10B981;
     border-color: #10B981;
-    font-weight: 700;
+    box-shadow: 0 0 10px rgba(16, 185, 129, 0.25);
   }
-  button.primary, .btn {
-    display: inline-block;
-    margin-top: 16px;
-    padding: 13px 16px;
-    font-size: 15px;
-    font-weight: 700;
-    border: none;
-    border-radius: 8px;
-    background: #10B981;
-    color: #052E16;
-    cursor: pointer;
+
+  /* Primary CTA Action Buttons */
+  button.primary, .btn-primary, #seal-btn, #reveal-btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 8px;
     width: 100%;
-    text-align: center;
+    margin-top: 18px;
+    padding: 13px 18px;
+    font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+    font-size: 0.92rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.06em;
+    background: #FFD600;
+    background-color: #FFD600;
+    color: #1A1600;
+    border: 1px solid #FFD600;
+    border-radius: 8px;
+    cursor: pointer;
     text-decoration: none;
-    transition: filter 0.15s;
+    text-align: center;
+    box-shadow: 0 2px 8px rgba(255, 214, 0, 0.25);
+    transition: background-color 0.15s ease, border-color 0.15s ease, box-shadow 0.15s ease, transform 0.05s ease;
   }
-  button.primary:hover, .btn:hover { filter: brightness(1.08); }
-  button.primary:disabled {
-    background: #334155;
-    color: #94A3B8;
-    cursor: not-allowed;
+  button.primary:hover:not(:disabled), .btn-primary:hover, #seal-btn:hover:not(:disabled), #reveal-btn:hover:not(:disabled) {
+    background: #FFE14D;
+    background-color: #FFE14D;
+    border-color: #FFE14D;
+    box-shadow: 0 4px 14px rgba(255, 214, 0, 0.35);
   }
-  .btn-secondary {
-    background: #1E293B;
-    color: #E2E8F0;
-    border: 1px solid #334155;
+  button.primary:active:not(:disabled), #seal-btn:active:not(:disabled), #reveal-btn:active:not(:disabled) {
+    background-color: #E6C000;
+    border-color: #E6C000;
+    transform: scale(0.97);
   }
+  button.primary:disabled, #seal-btn:disabled, #reveal-btn:disabled {
+    background: #282D37 !important;
+    background-color: #282D37 !important;
+    border-color: #282D37 !important;
+    color: #64748B !important;
+    cursor: not-allowed !important;
+    box-shadow: none !important;
+    transform: none !important;
+    opacity: 0.65;
+  }
+
+  /* Secondary Buttons */
+  .btn, .btn-secondary {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 6px;
+    padding: 10px 14px;
+    font-family: 'Space Grotesk', system-ui, -apple-system, sans-serif;
+    font-size: 0.82rem;
+    font-weight: 700;
+    text-transform: uppercase;
+    letter-spacing: 0.05em;
+    background: #1B1E24;
+    color: #CBD5E1;
+    border: 1px solid #262932;
+    border-radius: 8px;
+    cursor: pointer;
+    text-decoration: none;
+    text-align: center;
+    box-shadow: none;
+    transition: all 0.15s ease;
+  }
+  .btn:hover, .btn-secondary:hover:not(:disabled) {
+    background: #21252D;
+    border-color: #FFD600;
+    color: #FFD600;
+  }
+
+  /* SMS Button */
+  a.btn-sms {
+    background: #062419;
+    color: #10B981;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+  }
+  a.btn-sms:hover {
+    background: #0B3B2B;
+    border-color: #10B981;
+    color: #34D399;
+  }
+
+  /* Card and Panels */
   .card {
     background: #0B0C0E;
-    border-radius: 10px;
-    padding: 16px;
-    margin: 16px 0 0;
     border: 1px solid #262932;
-  }
-  .timelock-card {
-    background: #0F172A;
-    border: 1px solid #38BDF8;
     border-radius: 10px;
     padding: 16px;
-    margin: 12px 0;
+    margin: 18px 0 0;
+  }
+
+  /* Time-Lock Embargo Card */
+  .timelock-card {
+    background: #0B0C0E;
+    border: 1px solid rgba(16, 185, 129, 0.4);
+    border-radius: 10px;
+    padding: 16px;
+    margin: 14px 0;
     text-align: center;
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.1);
   }
   .timelock-title {
-    font-size: 0.78rem;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-size: 0.76rem;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-weight: 700;
     text-transform: uppercase;
     letter-spacing: 0.08em;
-    color: #38BDF8;
+    color: #10B981;
     margin-bottom: 6px;
   }
   .timelock-date {
+    font-family: 'Space Grotesk', system-ui, sans-serif;
     font-size: 1.02rem;
     font-weight: 700;
-    color: #F8FAFC;
+    color: #F1F5F9;
     margin-bottom: 8px;
   }
+
+  /* 24-Hour Countdown Clock */
   .countdown-clock {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 2.1rem;
     font-weight: 800;
-    letter-spacing: 0.06em;
-    color: #4ADE80;
+    letter-spacing: 0.08em;
+    color: #10B981;
     background: #062419;
-    border: 1px solid rgba(16,185,129,0.4);
+    border: 1.5px solid #10B981;
     border-radius: 8px;
-    padding: 10px 14px;
+    padding: 10px 16px;
     display: inline-block;
-    margin: 6px 0;
+    margin: 8px 0;
+    box-shadow: 0 0 16px rgba(16, 185, 129, 0.3), inset 0 0 10px rgba(16, 185, 129, 0.15);
   }
   .countdown-sub {
     font-size: 0.78rem;
     color: #94A3B8;
     margin-top: 6px;
+    line-height: 1.4;
   }
-  .ok { color: #4ADE80; }
+
+  /* Status Colors */
+  .ok { color: #10B981; }
   .err { color: #F87171; }
   .warn { color: #FBBF24; }
+
+  /* Monospace Telemetry / Keys / Hashes */
   .mono {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
     word-break: break-all;
+    overflow-wrap: anywhere;
     font-size: 0.82rem;
-    background: #14161B;
-    padding: 8px 10px;
+    background: #0B0C0E;
+    color: #34D399;
+    padding: 10px 12px;
     border-radius: 6px;
     border: 1px solid #262932;
     margin: 4px 0 10px;
   }
+
+  /* Responsive Multi-Button Rows */
   .row {
     display: flex;
+    flex-wrap: wrap;
     gap: 8px;
-    margin-top: 10px;
+    margin-top: 12px;
+    width: 100%;
   }
-  .row button, .row .btn {
-    flex: 1;
+  .row button, .row .btn, .row a {
+    flex: 1 1 140px;
+    min-width: 0;
     margin-top: 0;
   }
+
+  /* Plaintext Secret Display */
   #pw-display {
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
     font-size: 1.25rem;
     font-weight: 800;
-    color: #4ADE80;
+    color: #10B981;
     padding: 14px;
     background: #062419;
-    border: 1px solid #10B981;
+    border: 1.5px solid #10B981;
     border-radius: 8px;
     margin: 12px 0;
     word-break: break-all;
+    overflow-wrap: anywhere;
+    box-shadow: 0 0 14px rgba(16, 185, 129, 0.25);
   }
+
+  /* Footer Branding */
   .brand-footer {
-    margin-top: 20px;
-    padding-top: 14px;
-    border-top: 1px solid #1E222B;
+    margin-top: 24px;
+    padding-top: 18px;
+    border-top: 1px solid #1E2028;
     text-align: center;
-    font-size: 0.8rem;
-    color: #64748B;
-  }
-  .brand-link {
-    display: inline-flex;
+    display: flex;
+    flex-direction: column;
     align-items: center;
-    gap: 6px;
-    color: #94A3B8;
+    gap: 8px;
+  }
+  .footer-badge-link {
+    display: inline-block;
+    line-height: 0;
     text-decoration: none;
-    font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-    font-size: 0.78rem;
-    padding: 6px 12px;
-    border-radius: 999px;
-    background: #14161B;
-    border: 1px solid #262932;
-    transition: border-color 0.15s, color 0.15s;
+    transition: transform 0.15s ease;
   }
-  .brand-link:hover {
-    border-color: #10B981;
-    color: #F8FAFC;
+  .footer-badge-link:hover {
+    transform: translateY(-1px);
   }
-  .brand-logotext {
-    font-weight: 900;
-    letter-spacing: -0.03em;
-    color: #10B981;
-    font-family: system-ui, -apple-system, sans-serif;
-    font-size: 0.88rem;
+  .footer-badge-img {
+    width: 236px;
+    height: 36px;
+    max-width: 100%;
+    height: auto;
+    display: block;
+  }
+  .footer-sub {
+    font-family: 'JetBrains Mono', ui-monospace, monospace;
+    font-size: 10px;
+    color: #64748B;
+    letter-spacing: 0.04em;
+    line-height: 1.4;
   }
 </style>
 <script src="/mlkem.browser.js"></script>
 </head>
 <body>
+<div class="glider-grid" aria-hidden="true"></div>
+
 <div class="shell">
-  <div class="eyebrow">● NIST FIPS 203 ML-KEM-768 · Burn-on-Read</div>
+  <div class="scanner-line" aria-hidden="true"></div>
+
+  <header class="brand-header">
+    <div class="brand-top-row">
+      <a href="https://www.bitbop.dev" target="_blank" rel="noopener noreferrer" class="brand-wordmark-link" title="BitBop.dev — Quantum Hardware Escrow">
+        <img src="/badges/bitbop-wordmark-dark.svg" alt="BitBop.dev" class="brand-wordmark" width="200" height="42">
+      </a>
+      <div class="header-status-badge">
+        <span class="beacon-pip" aria-hidden="true"></span>
+        <span class="badge-text">LIVE ESCROW</span>
+      </div>
+    </div>
+    <div class="eyebrow">
+      <span class="beacon-pip" aria-hidden="true"></span>
+      <span>NIST FIPS 203 ML-KEM-768 · BURN-ON-READ</span>
+    </div>
+  </header>
 
   <!-- ADMIN VIEW -->
   <div id="admin-view">
@@ -485,10 +807,12 @@ function buildHtml() {
   <div id="result" class="card" style="display:none"></div>
 
   <footer class="brand-footer">
-    <a href="https://www.bitbop.dev" target="_blank" rel="noopener noreferrer" class="brand-link">
-      <span>powered by</span>
-      <span class="brand-logotext">BitBop</span>
+    <a href="https://www.bitbop.dev" target="_blank" rel="noopener noreferrer" class="footer-badge-link" title="Powered by BitBop.dev — Hardware Entropy &amp; Post-Quantum Provenance">
+      <img src="/badges/powered-by-bitbop-gold.svg" alt="Powered by BitBop.dev" width="236" height="36" class="footer-badge-img">
     </a>
+    <div class="footer-sub">
+      Hardware Entropy · Zero-Plaintext Storage · NIST FIPS 204 Provenance
+    </div>
   </footer>
 </div>
 
@@ -501,6 +825,259 @@ function buildHtml() {
   var unlockAtMs = null;
   var countdownTimer = null;
   var revealInFlight = false;
+  var sealInFlight = false;
+
+  var currentEscrowId = escrowId || null;
+  var timelockActive = false;
+  var currentRemainingSeconds = null;
+  var revealed = false;
+  var burned = false;
+  var lastError = null;
+  var secretPlaintext = null;
+
+  // --- White-Box Flight Recorder & Deterministic Seam ---
+  var isDevOrLocal = Boolean(
+    typeof window !== 'undefined' && (
+      window.location.hostname === 'localhost' ||
+      window.location.hostname === '127.0.0.1' ||
+      window.location.hostname === '[::1]' ||
+      window.location.search.includes('uat=1')
+    )
+  );
+
+  var MAX_UAT_EVENTS = 5000;
+  var inFlightFetchCount = 0;
+  var activeHolds = new Map();
+  var uatEventsList = [];
+  var uatStartedAt = Date.now();
+
+  var uatRecorder = {
+    record: function(ev) {
+      if (!isDevOrLocal) return;
+      var entry = Object.assign({ t: Date.now() }, ev);
+      uatEventsList.push(entry);
+      if (uatEventsList.length > MAX_UAT_EVENTS) {
+        uatEventsList.splice(0, uatEventsList.length - MAX_UAT_EVENTS);
+      }
+    },
+    beginHold: function(id, why) {
+      if (!isDevOrLocal) return function() {};
+      activeHolds.set(id, Date.now());
+      this.record({ type: 'hold', id: id, on: true, why: why });
+      var self = this;
+      return function() { self.endHold(id, why); };
+    },
+    endHold: function(id, why) {
+      if (!isDevOrLocal) return;
+      var started = activeHolds.get(id);
+      if (started === undefined) return;
+      activeHolds.delete(id);
+      this.record({
+        type: 'hold',
+        id: id,
+        on: false,
+        heldMs: Date.now() - started,
+        why: why
+      });
+    },
+    events: function(sinceIndex) {
+      return uatEventsList.slice(sinceIndex || 0);
+    },
+    clear: function() {
+      uatEventsList = [];
+      uatStartedAt = Date.now();
+      activeHolds.clear();
+    },
+    summary: function() {
+      var actions = uatEventsList.filter(function(e) { return e.type === 'action'; });
+      var net = uatEventsList.filter(function(e) { return e.type === 'network'; });
+      var networkStatuses = {};
+      for (var i = 0; i < net.length; i++) {
+        var st = String(net[i].status);
+        networkStatuses[st] = (networkStatuses[st] || 0) + 1;
+      }
+      var errors = uatEventsList.filter(function(e) { return e.type === 'error'; }).length;
+      var holds = uatEventsList.filter(function(e) { return e.type === 'hold' && !e.on; });
+      var maxHoldMs = 0;
+      for (var h = 0; h < holds.length; h++) {
+        if (typeof holds[h].heldMs === 'number' && holds[h].heldMs > maxHoldMs) {
+          maxHoldMs = holds[h].heldMs;
+        }
+      }
+      return {
+        minutes: Math.round((Date.now() - uatStartedAt) / 6000) / 10,
+        actions: actions.length,
+        networkCalls: net.length,
+        networkStatuses: networkStatuses,
+        errors: errors,
+        holds: { count: holds.length, maxMs: maxHoldMs }
+      };
+    },
+    exportLog: function() {
+      return {
+        format: 'web-uat/1',
+        savedAt: new Date().toISOString(),
+        url: window.location.href,
+        userAgent: navigator.userAgent,
+        viewport: { width: window.innerWidth, height: window.innerHeight },
+        state: getUatState(),
+        summary: this.summary(),
+        events: uatEventsList.slice()
+      };
+    },
+    download: function(filenamePrefix) {
+      var prefix = filenamePrefix || 'web-uat';
+      var blob = new Blob([JSON.stringify(this.exportLog(), null, 2)], { type: 'application/json' });
+      var a = document.createElement('a');
+      a.href = URL.createObjectURL(blob);
+      a.download = prefix + '-' + new Date().toISOString().replace(/[:.]/g, '-').slice(0, 19) + '.json';
+      document.body.appendChild(a);
+      a.click();
+      setTimeout(function() {
+        URL.revokeObjectURL(a.href);
+        a.remove();
+      }, 1000);
+    }
+  };
+
+  function getUatState() {
+    var isClaim = Boolean(currentEscrowId) || (document.getElementById('claim-view') && document.getElementById('claim-view').style.display !== 'none');
+    var remSec = null;
+    if (unlockAtMs) {
+      var s = Math.max(0, Math.ceil((unlockAtMs - Date.now()) / 1000));
+      remSec = timelockActive ? s : (currentRemainingSeconds !== null ? currentRemainingSeconds : 0);
+    }
+    return {
+      view: isClaim ? 'claim' : 'admin',
+      escrowId: currentEscrowId || null,
+      timelockActive: Boolean(timelockActive),
+      remainingSeconds: remSec,
+      revealed: Boolean(revealed),
+      burned: Boolean(burned),
+      error: lastError || null,
+      secretPlaintext: secretPlaintext || null
+    };
+  }
+
+  function isUatBusy() {
+    return (
+      inFlightFetchCount > 0 ||
+      activeHolds.size > 0 ||
+      Boolean(revealInFlight) ||
+      Boolean(sealInFlight)
+    );
+  }
+
+  if (isDevOrLocal) {
+    window.__uatRecorder = uatRecorder;
+    window.__uatState = getUatState;
+    window.__uatBusy = isUatBusy;
+
+    if (typeof window.fetch === 'function') {
+      var origFetch = window.fetch.bind(window);
+      window.fetch = async function(input, init) {
+        var urlStr = typeof input === 'string' ? input : (input && input.url ? input.url : (input instanceof Request ? input.url : String(input)));
+        var method = (init && init.method ? init.method : (input && input.method ? input.method : 'GET')).toUpperCase();
+        var t0 = Date.now();
+        inFlightFetchCount++;
+        try {
+          var res = await origFetch(input, init);
+          uatRecorder.record({
+            type: 'network',
+            method: method,
+            url: urlStr,
+            status: res.status,
+            ok: res.ok,
+            ms: Date.now() - t0
+          });
+          return res;
+        } catch (err) {
+          uatRecorder.record({
+            type: 'network',
+            method: method,
+            url: urlStr,
+            status: 0,
+            ok: false,
+            ms: Date.now() - t0,
+            error: String(err && err.message ? err.message : err)
+          });
+          throw err;
+        } finally {
+          inFlightFetchCount = Math.max(0, inFlightFetchCount - 1);
+        }
+      };
+    }
+
+    document.addEventListener('click', function(e) {
+      var target = e.target;
+      if (!target) return;
+      var el = target.closest('button, a, input, [role="button"]') || target;
+      var desc = el.id ? '#' + el.id : (el.className && typeof el.className === 'string' ? el.tagName.toLowerCase() + '.' + String(el.className).trim().split(/\s+/).join('.') : el.tagName.toLowerCase());
+      uatRecorder.record({
+        type: 'action',
+        name: 'click',
+        target: desc,
+        payload: { text: (el.textContent || '').trim().slice(0, 50) }
+      });
+    }, true);
+
+    document.addEventListener('input', function(e) {
+      var target = e.target;
+      if (!target || !target.tagName) return;
+      var tag = target.tagName.toLowerCase();
+      if (tag === 'input' || tag === 'textarea' || tag === 'select') {
+        var desc = target.id ? '#' + target.id : tag;
+        uatRecorder.record({
+          type: 'action',
+          name: 'input',
+          target: desc,
+          payload: {
+            type: target.type || 'text',
+            valueLength: (target.value || '').length
+          }
+        });
+      }
+    }, true);
+
+    window.addEventListener('error', function(e) {
+      uatRecorder.record({
+        type: 'error',
+        where: 'window',
+        message: String(e.message || e),
+        stack: e.error && e.error.stack ? e.error.stack : undefined
+      });
+    });
+
+    window.addEventListener('unhandledrejection', function(e) {
+      var reason = e.reason;
+      uatRecorder.record({
+        type: 'error',
+        where: 'promise',
+        message: String(reason && reason.message ? reason.message : reason),
+        stack: reason && reason.stack ? reason.stack : undefined
+      });
+    });
+
+    var origConsoleError = console.error.bind(console);
+    console.error = function() {
+      origConsoleError.apply(console, arguments);
+      var msg = Array.prototype.slice.call(arguments).map(function(a) {
+        return typeof a === 'string' ? a : (a instanceof Error ? a.message : JSON.stringify(a));
+      }).join(' ');
+      uatRecorder.record({
+        type: 'error',
+        where: 'console',
+        message: msg.slice(0, 1000)
+      });
+    };
+
+    uatRecorder.record({
+      type: 'action',
+      name: 'navigation',
+      target: window.location.href,
+      payload: { view: escrowId ? 'claim' : 'admin', escrowId: escrowId || null }
+    });
+  }
 
   function bytesToHex(bytes) {
     var out = '';
@@ -539,14 +1116,28 @@ function buildHtml() {
   }
 
   function showMessage(title, detail, tone) {
+    if (tone === 'err') {
+      lastError = title + (detail ? ': ' + detail : '');
+      uatRecorder.record({
+        type: 'state',
+        label: 'error_message',
+        summary: { title: title, detail: detail, tone: tone }
+      });
+    } else if (tone === 'ok') {
+      lastError = null;
+    }
+
     var el = document.getElementById('result');
     el.style.display = 'block';
-    el.style.borderColor = tone === 'err' ? '#EF4444' : tone === 'warn' ? '#FBBF24' : '#10B981';
+    el.style.borderColor = tone === 'err' ? '#F87171' : tone === 'warn' ? '#FBBF24' : '#10B981';
+    el.style.backgroundColor = tone === 'err' ? 'rgba(127, 29, 29, 0.25)' : '#0B0C0E';
     el.textContent = '';
 
     var h = document.createElement('div');
     h.className = tone === 'err' ? 'err' : tone === 'warn' ? 'warn' : 'ok';
+    h.style.fontFamily = "'Space Grotesk', system-ui, sans-serif";
     h.style.fontWeight = '700';
+    h.style.fontSize = '0.95rem';
     h.style.marginBottom = detail ? '6px' : '0';
     h.textContent = title;
     el.appendChild(h);
@@ -554,7 +1145,7 @@ function buildHtml() {
     if (detail) {
       var p = document.createElement('div');
       p.style.color = '#CBD5E1';
-      p.style.fontSize = '0.88rem';
+      p.style.fontSize = '0.85rem';
       p.textContent = detail;
       el.appendChild(p);
     }
@@ -613,6 +1204,8 @@ function buildHtml() {
       }
     }
 
+    sealInFlight = true;
+    var releaseHold = uatRecorder.beginHold('seal', 'Admin sealing secret via BitBop');
     var btn = document.getElementById('seal-btn');
     btn.disabled = true;
     btn.textContent = 'Sealing via BitBop...';
@@ -631,6 +1224,14 @@ function buildHtml() {
           return;
         }
         var d = res.d;
+        currentEscrowId = d.escrow_id;
+        lastError = null;
+        uatRecorder.record({
+          type: 'state',
+          label: 'secret_sealed',
+          summary: { escrowId: d.escrow_id, unlockKey: d.unlock_key }
+        });
+
         var el = document.getElementById('result');
         el.style.display = 'block';
         el.style.borderColor = '#10B981';
@@ -682,13 +1283,13 @@ function buildHtml() {
         row.className = 'row';
 
         var smsA = document.createElement('a');
-        smsA.className = 'btn';
+        smsA.className = 'btn btn-sms';
         smsA.href = d.sms_link;
         smsA.textContent = 'Send via SMS';
 
         var copyBtn = document.createElement('button');
         copyBtn.type = 'button';
-        copyBtn.className = 'primary btn-secondary';
+        copyBtn.className = 'btn btn-secondary';
         copyBtn.textContent = 'Copy SMS Body';
         copyBtn.addEventListener('click', function() { copyText(d.sms_body); });
 
@@ -700,6 +1301,10 @@ function buildHtml() {
         btn.disabled = false;
         btn.textContent = 'Seal & Create Share Link';
         showMessage(e.message, '', 'err');
+      })
+      .finally(function() {
+        sealInFlight = false;
+        releaseHold();
       });
   });
 
@@ -736,6 +1341,12 @@ function buildHtml() {
     var parsed = Date.parse(isoDateStr);
     if (Number.isNaN(parsed)) return;
     unlockAtMs = parsed;
+    timelockActive = true;
+    uatRecorder.record({
+      type: 'state',
+      label: 'timelock_started',
+      summary: { unlockAt: isoDateStr, unlockAtMs: unlockAtMs }
+    });
 
     var box = document.getElementById('timelock-box');
     var heading = document.getElementById('timelock-heading');
@@ -753,9 +1364,17 @@ function buildHtml() {
 
     function tick() {
       var remSec = (unlockAtMs - Date.now()) / 1000;
+      currentRemainingSeconds = Math.max(0, Math.ceil(remSec));
       if (remSec <= 0) {
         clearInterval(countdownTimer);
         countdownTimer = null;
+        timelockActive = false;
+        currentRemainingSeconds = 0;
+        uatRecorder.record({
+          type: 'state',
+          label: 'timelock_expired',
+          summary: { unlockAt: isoDateStr }
+        });
         heading.textContent = '🔓 Time-Lock Expired — Ready to Reveal';
         wrap.style.display = 'block';
         clock.textContent = '00:00:00';
@@ -772,6 +1391,8 @@ function buildHtml() {
         }
         return;
       }
+
+      timelockActive = true;
 
       heading.textContent = '⏳ Time-Locked Secret (Embargo Active)';
       revealBtn.disabled = true;
@@ -795,6 +1416,7 @@ function buildHtml() {
   async function performDirectBrowserReveal(unlockKeyStr) {
     if (revealInFlight) return;
     revealInFlight = true;
+    var releaseHold = uatRecorder.beginHold('reveal', 'Direct browser decapsulation & reveal');
     var btn = document.getElementById('reveal-btn');
     btn.disabled = true;
     btn.textContent = 'Decrypting in Browser (ML-KEM-768)...';
@@ -819,7 +1441,6 @@ function buildHtml() {
       var d = await r.json();
 
       if (r.status === 425) {
-        revealInFlight = false;
         if (d.unlock_at) startTimelockCountdown(d.unlock_at);
         showMessage('Time-Locked (425 Too Early)', 'Secret becomes available on ' + new Date(d.unlock_at).toLocaleString(), 'warn');
         return;
@@ -827,13 +1448,13 @@ function buildHtml() {
 
       btn.disabled = false;
       btn.textContent = 'Reveal / Decrypt';
-      revealInFlight = false;
 
       if (r.status === 403) {
         showMessage('Wrong unlock key (403). Secret NOT burned.', 'Remaining attempts before backoff: ' + (d.remaining_attempts !== undefined ? d.remaining_attempts : 'retry'), 'err');
         return;
       }
       if (r.status === 409) {
+        burned = true;
         showMessage('Secret permanently burned (409). Cannot retrieve again.', 'This one-time record was already unsealed and destroyed.', 'warn');
         return;
       }
@@ -844,6 +1465,16 @@ function buildHtml() {
 
       // Decrypt ML-KEM-768 + AES-256-GCM directly in browser WebCrypto
       var plaintext = await browserDecryptBitBopReveal(d, secretKeyBytes, kem);
+      secretPlaintext = plaintext;
+      revealed = true;
+      burned = true;
+      lastError = null;
+
+      uatRecorder.record({
+        type: 'state',
+        label: 'secret_revealed',
+        summary: { escrowId: d.escrow_id, secretLength: plaintext.length }
+      });
 
       // Verify ML-DSA-44 receipt directly against https://api.bitbop.dev/verify
       var verifyOk = false;
@@ -883,7 +1514,7 @@ function buildHtml() {
 
       var copyPwBtn = document.createElement('button');
       copyPwBtn.type = 'button';
-      copyPwBtn.className = 'primary btn-secondary';
+      copyPwBtn.className = 'btn btn-secondary';
       copyPwBtn.style.marginTop = '4px';
       copyPwBtn.textContent = 'Copy Secret Password';
       copyPwBtn.addEventListener('click', function() { copyText(plaintext); });
@@ -911,13 +1542,16 @@ function buildHtml() {
     } catch (e) {
       btn.disabled = false;
       btn.textContent = 'Reveal / Decrypt';
-      revealInFlight = false;
       showMessage('Decryption error: ' + e.message, '', 'err');
+    } finally {
+      revealInFlight = false;
+      releaseHold();
     }
   }
 
   // Probe BitBop directly on Claim Page load (without side-channel URL params or burning the secret)
   async function probeEscrowStatusOnLoad() {
+    var releaseHold = uatRecorder.beginHold('probe', 'Probing escrow status on load');
     try {
       var kem = new window.BitBopMlKem.MlKem768();
       var kp = await kem.generateKeyPair();
@@ -937,12 +1571,17 @@ function buildHtml() {
       if (r.status === 425 && d.unlock_at) {
         startTimelockCountdown(d.unlock_at);
       } else if (r.status === 409) {
+        burned = true;
         showMessage('Secret permanently burned (409). Cannot retrieve again.', 'This one-time secret has already been claimed.', 'warn');
       }
-    } catch (_) {}
+    } catch (_) {
+    } finally {
+      releaseHold();
+    }
   }
 
   if (escrowId) {
+    currentEscrowId = escrowId;
     document.getElementById('admin-view').style.display = 'none';
     document.getElementById('claim-view').style.display = 'block';
     document.getElementById('claim-id').textContent = 'Escrow ID: ' + escrowId;
@@ -965,23 +1604,110 @@ function buildHtml() {
 
 const server = http.createServer(async (req, res) => {
   try {
-    const u = new URL(req.url, 'http://localhost');
-    if (req.method === 'GET' && u.pathname === '/') {
-      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8' });
-      res.end(buildHtml());
+    const rawUrl = req.url || '/';
+    // Path traversal early defense: reject any parent escapement or encoded path tricks
+    if (rawUrl.includes('..') || rawUrl.includes('%2e') || rawUrl.includes('%2E') || rawUrl.includes('\\') || rawUrl.includes('%5c') || rawUrl.includes('%5C')) {
+      res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+      res.end('Forbidden');
       return;
     }
-    if (req.method === 'GET' && u.pathname === '/mlkem.browser.js') {
+
+    const u = new URL(rawUrl, 'http://localhost');
+
+    // Root route /
+    if (u.pathname === '/') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, {
+          'Content-Type': 'text/plain; charset=utf-8',
+          'Allow': 'GET, HEAD',
+        });
+        res.end('Method not allowed');
+        return;
+      }
+      const html = buildHtml();
+      const buf = Buffer.from(html, 'utf8');
+      res.writeHead(200, {
+        'Content-Type': 'text/html; charset=utf-8',
+        'Cache-Control': 'no-cache',
+        'Content-Length': buf.length,
+      });
+      if (req.method === 'HEAD') {
+        res.end();
+      } else {
+        res.end(buf);
+      }
+      return;
+    }
+
+    // Favicon route /favicon.svg
+    if (u.pathname === '/favicon.svg') {
+      const faviconPath = path.join(PUBLIC_DIR, 'favicon.svg');
+      const buf = getCachedSvg(faviconPath);
+      if (!buf) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Favicon not found');
+        return;
+      }
+      return serveSvgBuffer(req, res, buf);
+    }
+
+    // Badges route /badges/:filename
+    if (u.pathname.startsWith('/badges/')) {
+      // Layer 1: Strict Regex Whitelist
+      const badgeMatch = u.pathname.match(/^\/badges\/([a-zA-Z0-9_-]+\.svg)$/);
+      if (!badgeMatch) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Badge not found');
+        return;
+      }
+      const badgeFilename = badgeMatch[1];
+
+      // Layer 2: Canonical Directory Boundary Verification
+      const resolvedPath = path.resolve(BADGES_DIR, badgeFilename);
+      const normalizedBadgesDir = path.resolve(BADGES_DIR);
+      if (!resolvedPath.startsWith(normalizedBadgesDir + path.sep)) {
+        res.writeHead(403, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Forbidden');
+        return;
+      }
+
+      // Layer 3: File existence & type check (via getCachedSvg)
+      const buf = getCachedSvg(resolvedPath);
+      if (!buf) {
+        res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
+        res.end('Badge not found');
+        return;
+      }
+      return serveSvgBuffer(req, res, buf);
+    }
+
+    // Client-side ML-KEM bundle Route
+    if (u.pathname === '/mlkem.browser.js') {
+      if (req.method !== 'GET' && req.method !== 'HEAD') {
+        res.writeHead(405, { 'Content-Type': 'text/plain; charset=utf-8', 'Allow': 'GET, HEAD' });
+        res.end('Method not allowed');
+        return;
+      }
+      const buf = Buffer.from(MLKEM_BROWSER_BUNDLE, 'utf8');
       res.writeHead(200, {
         'Content-Type': 'application/javascript; charset=utf-8',
         'Cache-Control': 'public, max-age=3600',
+        'Content-Length': buf.length,
       });
-      res.end(MLKEM_BROWSER_BUNDLE);
+      if (req.method === 'HEAD') {
+        res.end();
+      } else {
+        res.end(buf);
+      }
       return;
     }
+
+    // Health route
     if (req.method === 'GET' && u.pathname === '/health') {
       return json(res, 200, { status: 'ok', service: 'SecretSender' });
     }
+
+    // Share API route
     if (req.method === 'POST' && u.pathname === '/api/share') {
       const body = await readBody(req);
       try {
@@ -992,13 +1718,21 @@ const server = http.createServer(async (req, res) => {
       }
       return;
     }
-    res.writeHead(404);
+
+    res.writeHead(404, { 'Content-Type': 'text/plain; charset=utf-8' });
     res.end('Not found');
   } catch (e) {
     json(res, 500, { error: e.message });
   }
 });
 
-server.listen(PORT, HOST, () => {
-  console.log(`SecretSender listening on http://${HOST}:${PORT}`);
-});
+export { buildHtml, handleShare, ensureBitBopApiKey };
+
+const isMainModule =
+  process.argv[1] && path.resolve(process.argv[1]) === path.resolve(fileURLToPath(import.meta.url));
+
+if (isMainModule) {
+  server.listen(PORT, HOST, () => {
+    console.log(`SecretSender listening on http://${HOST}:${PORT}`);
+  });
+}

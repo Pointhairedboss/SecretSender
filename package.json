@@ -5,7 +5,14 @@
   "type": "module",
   "main": "server.mjs",
   "scripts": {
-    "start": "node server.mjs"
+    "start": "node server.mjs",
+    "build:cf": "node scripts/build_cloudflare.mjs",
+    "preview:cf": "node scripts/build_cloudflare.mjs && npx wrangler dev",
+    "deploy": "node scripts/build_cloudflare.mjs && npx wrangler deploy",
+    "test": "node tests/e2e/runner.mjs",
+    "uat:deterministic": "node scripts/run_s21_deterministic_uat.mjs",
+    "uat:model": "node scripts/run_model_uat.mjs",
+    "uat": "node scripts/run_s21_deterministic_uat.mjs && node scripts/run_model_uat.mjs"
   },
   "dependencies": {
     "mlkem": "^2.7.0"
@@ -13,5 +20,8 @@
   "engines": {
     "node": ">=20.0.0"
   },
-  "license": "MIT"
+  "license": "MIT",
+  "devDependencies": {
+    "playwright": "^1.64.1"
+  }
 }

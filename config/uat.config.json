@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "projectName": "SecretSender Physical S21 UAT",
+  "baseUrl": "http://localhost:5179",
+  "outputDir": "logs/uat",
+  "driverLlm": {
+    "endpoint": "http://localhost:8084/v1/chat/completions",
+    "model": "Qwen3.5-4B",
+    "apiKeyEnv": "UAT_LLM_API_KEY",
+    "temperature": 0.2,
+    "maxTokens": 512,
+    "timeoutMs": 15000
+  },
+  "viewports": {
+    "desktop": { "width": 1440, "height": 900, "isMobile": false },
+    "s21": { "width": 412, "height": 915, "isMobile": true, "hasTouch": true }
+  },
+  "adbDevice": {
+    "enabled": true,
+    "serial": "R5CR60QL05P",
+    "cdpPort": 9222,
+    "reversePorts": [5179],
+    "keepScreenOn": true
+  },
+  "synchronization": {
+    "pollIntervalMs": 150,
+    "maxBusyWaitMs": 15000,
+    "settleDelayMs": 250
+  },
+  "thresholds": {
+    "maxErrors": 0,
+    "maxHttp5xx": 0,
+    "maxHorizontalOverflowPx": 0,
+    "p90NetworkLatencyMs": 2500
+  },
+  "personas": [
+    {
+      "id": "happy-path",
+      "name": "First-Time User (Happy Path)",
+      "viewport": "s21",
+      "startPath": "/?uat=1",
+      "maxSteps": 10,
+      "goal": "Admin seals a secret password with default settings, retrieves the Claim URL and Unlock Key, opens the Claim view, enters the PIN, and reveals/decrypts the secret with ML-KEM-768 and ML-DSA-44 verification.",
+      "instructions": [
+        "First, enter a strong password into the secret input.",
+        "Click the primary 'Seal & Create Share Link' button.",
+        "After confirmation appears, read the Claim URL and PIN.",
+        "Navigate to the Claim URL, fill in the Unlock Key, and click 'Reveal / Decrypt'.",
+        "Assert the decrypted password appears and return action='done'."
+      ]
+    },
+    {
+      "id": "adversarial-validation",
+      "name": "Edge-Case & Validation Explorer",
+      "viewport": "s21",
+      "startPath": "/?uat=1",
+      "maxSteps": 12,
+      "goal": "Attempt empty secret submission to verify zero-network validation, seal a secret, test an incorrect PIN on claim view to verify 403 non-burn preservation, and test duplicate reveal on burned escrow.",
+      "instructions": [
+        "First click 'Seal & Create Share Link' with empty input to test client validation.",
+        "Verify error message appears and no network calls are dispatched.",
+        "Enter a secret and seal it.",
+        "On claim view, intentionally enter an incorrect PIN and assert HTTP 403 non-burn warning.",
+        "Enter the correct PIN to reveal.",
+        "Attempt to reveal again and assert HTTP 409 burned message."
+      ]
+    },
+    {
+      "id": "mobile-ux",
+      "name": "Mobile Handheld User (Galaxy S21 Ultra 412x915)",
+      "viewport": "s21",
+      "startPath": "/?uat=1",
+      "maxSteps": 12,
+      "goal": "Exercise mobile touch affordances on Samsung Galaxy S21 Ultra: cycle through embargo presets, test date picker, enter secret and custom PIN, seal, test copy buttons, and assert 0px horizontal overflow across all steps.",
+      "instructions": [
+        "Touch preset buttons (+30s, +1h, +24h, Custom) to test active styling.",
+        "Enter a secret and custom PIN.",
+        "Click 'Seal & Create Share Link'.",
+        "Click 'Copy SMS Body' button to test clipboard interaction.",
+        "Verify 0px horizontal overflow and 0 clipped affordances."
+      ]
+    }
+  ]
+}

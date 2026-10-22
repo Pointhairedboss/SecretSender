@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 236 36" width="236" height="36" fill="none" role="img" aria-label="Powered by BitBop.dev">
+  <rect x="0.75" y="0.75" width="234.5" height="34.5" rx="17.25" fill="#F8FAFC" stroke="#CBD5E1" stroke-width="1.5"/>
+  <!-- Left Obsidian Icon Circle -->
+  <rect x="4" y="4" width="28" height="28" rx="14" fill="#0F1012"/>
+  <rect x="10" y="10" width="2.5" height="16" rx="1" fill="#FFAF00"/>
+  <path d="M14 10H19.8C22.4 10 24 11.4 24 13.5C24 15 23 16.2 21.5 16.7C23.4 17.1 24.6 18.5 24.6 20.4C24.6 22.8 22.7 24.5 19.9 24.5H14V21.8H19.4C20.8 21.8 21.7 21.1 21.7 20C21.7 18.9 20.8 18.3 19.3 18.3H15.5V15.7H19.2C20.5 15.7 21.3 15.1 21.3 14C21.3 13 20.5 12.4 19.2 12.4H14V10Z" fill="#FFD600"/>
+  <circle cx="25.5" cy="10.5" r="2.2" fill="#10B981"/>
+  <text x="40" y="21.5" fill="#475569" font-family="'JetBrains Mono', ui-monospace, monospace" font-weight="700" font-size="9.5" letter-spacing="1.1">POWERED BY</text>
+  <text x="115" y="22.5" fill="#0F1012" font-family="'Space Grotesk', 'Inter', system-ui, sans-serif" font-weight="800" font-size="14" letter-spacing="-0.3">BitBop</text>
+  <rect x="166" y="8" width="36" height="20" rx="6" fill="#FFD600"/>
+  <text x="184" y="22" text-anchor="middle" fill="#1A1600" font-family="'Space Grotesk', 'Inter', system-ui, sans-serif" font-weight="800" font-size="12.5">.dev</text>
+  <path d="M212 14.5H218.5V21M218.5 14.5L211.5 21.5" stroke="#0F1012" stroke-width="1.6" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

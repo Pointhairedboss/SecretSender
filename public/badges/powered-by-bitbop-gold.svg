@@ -1,0 +1,13 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 236 36" width="236" height="36" fill="none" role="img" aria-label="Powered by BitBop.dev">
+  <!-- Outer Obsidian Pill -->
+  <rect x="0.75" y="0.75" width="234.5" height="34.5" rx="17.25" fill="#0B0C0E" stroke="#FFD600" stroke-width="1.5"/>
+  <!-- Emerald Telemetry Dot -->
+  <circle cx="16" cy="18" r="4" fill="#10B981"/>
+  <circle cx="16" cy="18" r="6.5" stroke="#10B981" stroke-width="1" stroke-opacity="0.45"/>
+  <!-- Left Label -->
+  <text x="28" y="21.5" fill="#CBD5E1" font-family="'JetBrains Mono', ui-monospace, monospace" font-weight="700" font-size="9.5" letter-spacing="1.1">POWERED BY</text>
+  <!-- Right Gold Capsule -->
+  <rect x="108" y="3" width="125" height="30" rx="15" fill="#FFD600"/>
+  <text x="122" y="22.5" fill="#1A1600" font-family="'Space Grotesk', 'Inter', system-ui, sans-serif" font-weight="800" font-size="14" letter-spacing="-0.4">BitBop.dev</text>
+  <path d="M211 14.5H217.5V21M217.5 14.5L210.5 21.5" stroke="#1A1600" stroke-width="1.75" stroke-linecap="round" stroke-linejoin="round"/>
+</svg>

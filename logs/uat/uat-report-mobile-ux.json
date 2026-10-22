@@ -1,0 +1,557 @@
+{
+  "persona": "mobile-ux",
+  "completedAt": "2026-10-22T02:22:01.451Z",
+  "stepsExecuted": 8,
+  "deadClicks": [],
+  "viewportOverflowSteps": [],
+  "steps": [
+    {
+      "step": 1,
+      "decision": {
+        "thought": "Touch +30s (Demo) preset button",
+        "action": "click",
+        "selector": "button.preset-btn:has-text(\"+30s (Demo)\")",
+        "expectedOutcome": "Preset toggled active and date updated"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635717747,
+          "type": "action",
+          "name": "click",
+          "target": "button.pre.et-btn",
+          "payload": {
+            "text": "+30s (Demo)"
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-01.png"
+    },
+    {
+      "step": 2,
+      "decision": {
+        "thought": "Touch +1h preset button",
+        "action": "click",
+        "selector": "button.preset-btn:has-text(\"+1h\")",
+        "expectedOutcome": "+1h preset active"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635718468,
+          "type": "action",
+          "name": "click",
+          "target": "button.pre.et-btn",
+          "payload": {
+            "text": "+1h"
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-02.png"
+    },
+    {
+      "step": 3,
+      "decision": {
+        "thought": "Touch Immediate preset button to clear embargo",
+        "action": "click",
+        "selector": "button.preset-btn:has-text(\"Immediate\")",
+        "expectedOutcome": "Immediate preset active"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635719139,
+          "type": "action",
+          "name": "click",
+          "target": "button.pre.et-btn",
+          "payload": {
+            "text": "Immediate"
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-03.png"
+    },
+    {
+      "step": 4,
+      "decision": {
+        "thought": "Fill secret input on mobile keyboard",
+        "action": "type",
+        "selector": "#secret",
+        "text": "MobileGalaxyS21SecretKey",
+        "expectedOutcome": "Secret filled"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635719757,
+          "type": "action",
+          "name": "input",
+          "target": "#secret",
+          "payload": {
+            "type": "text",
+            "valueLength": 24
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-04.png"
+    },
+    {
+      "step": 5,
+      "decision": {
+        "thought": "Fill PIN input",
+        "action": "type",
+        "selector": "#pin",
+        "text": "s21-pin-412",
+        "expectedOutcome": "PIN filled"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635720388,
+          "type": "action",
+          "name": "input",
+          "target": "#pin",
+          "payload": {
+            "type": "text",
+            "valueLength": 11
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-05.png"
+    },
+    {
+      "step": 6,
+      "decision": {
+        "thought": "Click Seal & Create Share Link CTA",
+        "action": "click",
+        "selector": "#seal-btn",
+        "expectedOutcome": "Secret sealed cleanly"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "admin",
+        "escrowId": null,
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "claim",
+        "escrowId": "c94601a6-7477-4be9-9de7-aaf6c988872c",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635720950,
+          "type": "action",
+          "name": "click",
+          "target": "#seal-btn",
+          "payload": {
+            "text": "Seal & Create Share Link"
+          }
+        },
+        {
+          "t": 1792635720950,
+          "type": "hold",
+          "id": "seal",
+          "on": true,
+          "why": "Admin sealing secret via BitBop"
+        },
+        {
+          "t": 1792635721157,
+          "type": "network",
+          "method": "POST",
+          "url": "/api/share",
+          "status": 200,
+          "ok": true,
+          "ms": 207
+        },
+        {
+          "t": 1792635721159,
+          "type": "state",
+          "label": "secret_sealed",
+          "summary": {
+            "escrowId": "c94601a6-7477-4be9-9de7-aaf6c988872c",
+            "unlockKey": "s21-pin-412"
+          }
+        },
+        {
+          "t": 1792635721160,
+          "type": "hold",
+          "id": "seal",
+          "on": false,
+          "heldMs": 210,
+          "why": "Admin sealing secret via BitBop"
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-06.png"
+    },
+    {
+      "step": 7,
+      "decision": {
+        "thought": "Click Copy SMS Body button to test mobile clipboard feedback",
+        "action": "click",
+        "selector": "button:has-text(\"Copy SMS Body\")",
+        "expectedOutcome": "SMS body copied"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "stateBefore": {
+        "view": "claim",
+        "escrowId": "c94601a6-7477-4be9-9de7-aaf6c988872c",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "stateAfter": {
+        "view": "claim",
+        "escrowId": "c94601a6-7477-4be9-9de7-aaf6c988872c",
+        "timelockActive": false,
+        "remainingSeconds": null,
+        "revealed": false,
+        "burned": false,
+        "error": null,
+        "secretPlaintext": null
+      },
+      "newEvents": [
+        {
+          "t": 1792635721941,
+          "type": "action",
+          "name": "click",
+          "target": "button.btn btn-.econdary",
+          "payload": {
+            "text": "Copy SMS Body"
+          }
+        }
+      ],
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-07.png"
+    },
+    {
+      "step": 8,
+      "decision": {
+        "thought": "Mobile UX viewport exploration complete with 0px horizontal overflow",
+        "action": "done",
+        "expectedOutcome": "Workflow complete"
+      },
+      "actionResult": "ok",
+      "deadClickWarning": false,
+      "viewportAudit": {
+        "viewportWidth": 320,
+        "viewportHeight": 584,
+        "scrollWidth": 320,
+        "horizontalOverflowPx": 0,
+        "clippedElements": []
+      },
+      "screenshot": "logs/uat/screenshots/mobile-ux/step-08.png"
+    }
+  ],
+  "flightRecorder": {
+    "format": "web-uat/1",
+    "savedAt": "2026-10-22T02:22:02.556Z",
+    "url": "http://localhost:5179/?uat=1",
+    "userAgent": "Mozilla/5.0 (Linux; Android 10; K) AppleWebKit/537.36 (KHTML, like Gecko) Chrome/155.0.0.0 Mobile Safari/537.36",
+    "viewport": {
+      "width": 320,
+      "height": 584
+    },
+    "state": {
+      "view": "claim",
+      "escrowId": "c94601a6-7477-4be9-9de7-aaf6c988872c",
+      "timelockActive": false,
+      "remainingSeconds": null,
+      "revealed": false,
+      "burned": false,
+      "error": null,
+      "secretPlaintext": null
+    },
+    "summary": {
+      "minutes": 0.1,
+      "actions": 8,
+      "networkCalls": 1,
+      "networkStatuses": {
+        "200": 1
+      },
+      "errors": 0,
+      "holds": {
+        "count": 1,
+        "maxMs": 210
+      }
+    },
+    "events": [
+      {
+        "t": 1792635716925,
+        "type": "action",
+        "name": "navigation",
+        "target": "http://localhost:5179/?uat=1",
+        "payload": {
+          "view": "admin",
+          "escrowId": null
+        }
+      },
+      {
+        "t": 1792635717747,
+        "type": "action",
+        "name": "click",
+        "target": "button.pre.et-btn",
+        "payload": {
+          "text": "+30s (Demo)"
+        }
+      },
+      {
+        "t": 1792635718468,
+        "type": "action",
+        "name": "click",
+        "target": "button.pre.et-btn",
+        "payload": {
+          "text": "+1h"
+        }
+      },
+      {
+        "t": 1792635719139,
+        "type": "action",
+        "name": "click",
+        "target": "button.pre.et-btn",
+        "payload": {
+          "text": "Immediate"
+        }
+      },
+      {
+        "t": 1792635719757,
+        "type": "action",
+        "name": "input",
+        "target": "#secret",
+        "payload": {
+          "type": "text",
+          "valueLength": 24
+        }
+      },
+      {
+        "t": 1792635720388,
+        "type": "action",
+        "name": "input",
+        "target": "#pin",
+        "payload": {
+          "type": "text",
+          "valueLength": 11
+        }
+      },
+      {
+        "t": 1792635720950,
+        "type": "action",
+        "name": "click",
+        "target": "#seal-btn",
+        "payload": {
+          "text": "Seal & Create Share Link"
+        }
+      },
+      {
+        "t": 1792635720950,
+        "type": "hold",
+        "id": "seal",
+        "on": true,
+        "why": "Admin sealing secret via BitBop"
+      },
+      {
+        "t": 1792635721157,
+        "type": "network",
+        "method": "POST",
+        "url": "/api/share",
+        "status": 200,
+        "ok": true,
+        "ms": 207
+      },
+      {
+        "t": 1792635721159,
+        "type": "state",
+        "label": "secret_sealed",
+        "summary": {
+          "escrowId": "c94601a6-7477-4be9-9de7-aaf6c988872c",
+          "unlockKey": "s21-pin-412"
+        }
+      },
+      {
+        "t": 1792635721160,
+        "type": "hold",
+        "id": "seal",
+        "on": false,
+        "heldMs": 210,
+        "why": "Admin sealing secret via BitBop"
+      },
+      {
+        "t": 1792635721941,
+        "type": "action",
+        "name": "click",
+        "target": "button.btn btn-.econdary",
+        "payload": {
+          "text": "Copy SMS Body"
+        }
+      }
+    ]
+  }
+}
