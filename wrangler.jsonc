@@ -8,12 +8,11 @@
     "directory": "./public",
     "binding": "ASSETS",
     "run_worker_first": ["/api/*", "/health"]
-  }
-  // Uncomment to bind a custom domain on Cloudflare DNS (e.g. secrets.bitbop.dev):
-  // "routes": [
-  //   {
-  //     "pattern": "secrets.bitbop.dev",
-  //     "custom_domain": true
-  //   }
-  // ]
+  },
+  "routes": [
+    {
+      "pattern": "secrets.bitbop.dev",
+      "custom_domain": true
+    }
+  ]
 }
