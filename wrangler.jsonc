@@ -9,6 +9,12 @@
     "binding": "ASSETS",
     "run_worker_first": ["/api/*", "/health"]
   },
+  "services": [
+    {
+      "binding": "BITBOP_API",
+      "service": "bitbop-api"
+    }
+  ],
   "routes": [
     {
       "pattern": "secrets.bitbop.dev",

@@ -2,7 +2,7 @@
 // Cloudflare Edge Worker + Static Assets entrypoint for SecretSender.
 // Uses 0 Cloudflare KV operations: static assets (index.html, mlkem.browser.js,
 // favicon.svg, badges/*.svg) are served directly from Cloudflare Edge Assets,
-// and POST /api/share commits secrets to BitBop Hardware Escrow (https://api.bitbop.dev).
+// and POST /api/share commits secrets to BitBop Hardware Escrow (via BITBOP_API service binding or https://api.bitbop.dev).
 
 import crypto from 'node:crypto';
 import { MlKem768 } from 'mlkem';
@@ -36,6 +36,14 @@ function jsonResponse(status, data) {
   });
 }
 
+function upstreamFetch(env, apiBase, pathname, opts = {}) {
+  const url = `${apiBase}${pathname}`;
+  if (env && env.BITBOP_API && typeof env.BITBOP_API.fetch === 'function') {
+    return env.BITBOP_API.fetch(new Request(url, opts));
+  }
+  return fetch(url, opts);
+}
+
 async function ensureBitBopApiKey(env, apiBase) {
   if (env.BITBOP_API_KEY && String(env.BITBOP_API_KEY).trim()) {
     return String(env.BITBOP_API_KEY).trim();
@@ -45,7 +53,7 @@ async function ensureBitBopApiKey(env, apiBase) {
   try {
     const kem = new MlKem768();
     const [publicKey, secretKey] = await kem.generateKeyPair();
-    const res = await fetch(`${apiBase}/api/keys/free`, {
+    const res = await upstreamFetch(env, apiBase, '/api/keys/free', {
       method: 'POST',
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
@@ -58,10 +66,9 @@ async function ensureBitBopApiKey(env, apiBase) {
       const sharedSecret = await kem.decap(Buffer.from(data.cipher.kyber_ciphertext_hex, 'hex'), secretKey);
       const iv = Buffer.from(data.cipher.aes_iv_hex, 'hex');
       const ct = Buffer.from(data.cipher.aes_ciphertext_hex, 'hex');
-      const decipher = crypto.createDecipheriv('aes-256-gcm', Buffer.from(sharedSecret), iv);
-      decipher.setAuthTag(ct.subarray(ct.length - 16));
-      const keyPlain = Buffer.concat([decipher.update(ct.subarray(0, ct.length - 16)), decipher.final()]).toString('utf8');
-      cachedFreeApiKey = keyPlain.trim();
+      const aesKey = await crypto.subtle.importKey('raw', sharedSecret, { name: 'AES-GCM' }, false, ['decrypt']);
+      const plainBuf = await crypto.subtle.decrypt({ name: 'AES-GCM', iv }, aesKey, ct);
+      cachedFreeApiKey = new TextDecoder().decode(plainBuf).trim();
       return cachedFreeApiKey;
     }
   } catch (_) {}
@@ -70,8 +77,8 @@ async function ensureBitBopApiKey(env, apiBase) {
   return cachedFreeApiKey;
 }
 
-async function apiFetch(apiBase, pathname, opts = {}) {
-  const res = await fetch(apiBase + pathname, opts);
+async function apiFetch(env, apiBase, pathname, opts = {}) {
+  const res = await upstreamFetch(env, apiBase, pathname, opts);
   const text = await res.text();
   let data;
   try {
@@ -117,7 +124,7 @@ async function handleShareRequest(request, env) {
   };
   if (clientIp) commitHeaders['X-Forwarded-For'] = clientIp;
 
-  const { status, data } = await apiFetch(apiBase, '/escrow/commit', {
+  const { status, data } = await apiFetch(env, apiBase, '/escrow/commit', {
     method: 'POST',
     headers: commitHeaders,
     body: JSON.stringify({
@@ -154,7 +161,7 @@ async function handleShareRequest(request, env) {
     ' | Provenance: ' +
     provenanceUrl;
 
-  const verifyResp = await apiFetch(apiBase, '/verify', {
+  const verifyResp = await apiFetch(env, apiBase, '/verify', {
     method: 'POST',
     headers: { 'Content-Type': 'application/json' },
     body: JSON.stringify(data),
