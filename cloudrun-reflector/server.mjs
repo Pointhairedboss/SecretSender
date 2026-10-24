@@ -100,27 +100,11 @@ async function getExternalTelemetry() {
 }
 
 /**
- * Calls the Google Gemini / Vertex AI OpenAI-compatible endpoint configured in hermes.yaml.
- * Automatically falls back to Vertex AI (via Cloud Run's GCP Metadata Server OAuth token on
- * project gen-lang-client-0057994039) if an AI Studio key returns HTTP 429/403 or is omitted.
+ * Calls the Google Cloud Vertex AI Global endpoint configured in hermes.yaml
+ * (https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google/models/{model}:generateContent)
+ * using the Cloud Run instance's GCP Metadata Server OAuth token (billed directly to GCP credits on gen-lang-client-0057994039).
  */
 async function callHermesGoogleEndpoint(messages, modelOverride = null) {
-  const apiKey = (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '').trim();
-  const baseModel = (modelOverride || HERMES_CONFIG.default_model || 'gemini-2.5-flash').replace(/^google\//, '');
-
-  const attempts = [];
-
-  // Attempt 1: Google AI Studio / Gemini OpenAI-compatible endpoint (if GOOGLE_API_KEY is present)
-  if (apiKey) {
-    attempts.push({
-      provider: 'gemini',
-      endpoint: `${HERMES_CONFIG.openai_base_url.replace(/\/+$/, '')}/chat/completions`,
-      model: baseModel,
-      getToken: async () => apiKey,
-    });
-  }
-
-  // Attempt 2: Google Cloud Vertex AI OpenAI-compatible endpoint (australia-southeast1 & us-central1) via GCP Metadata OAuth token
   const getMetadataToken = async () => {
     const metaRes = await fetch(
       'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
@@ -133,46 +117,41 @@ async function callHermesGoogleEndpoint(messages, modelOverride = null) {
     return tokenData.access_token;
   };
 
-  attempts.push(
-    {
-      provider: 'google-vertex-syd',
-      endpoint: `${HERMES_CONFIG.vertex_openai_base_url.replace(/\/+$/, '')}/chat/completions`,
-      model: `google/${baseModel}`,
-      getToken: getMetadataToken,
-    },
-    {
-      provider: 'google-vertex-us',
-      endpoint:
-        'https://us-central1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/us-central1/endpoints/openapi/chat/completions',
-      model: `google/${baseModel}`,
-      getToken: getMetadataToken,
-    }
-  );
+  const systemMsg = messages.find((m) => m.role === 'system')?.content || '';
+  const userMsg = messages.filter((m) => m.role !== 'system').map((m) => m.content).join('\n');
+
+  const vertexModels = modelOverride
+    ? [modelOverride.replace(/^google\//, '')]
+    : ['gemini-3.5-flash-lite', 'gemini-3.8-flash', 'gemini-3.5-flash'];
 
   const errors = [];
-  for (const candidate of attempts) {
+  for (const modelName of vertexModels) {
+    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google/models/${modelName}:generateContent`;
     try {
-      const bearerToken = await candidate.getToken();
-      const res = await fetch(candidate.endpoint, {
+      const bearerToken = await getMetadataToken();
+      const res = await fetch(endpoint, {
         method: 'POST',
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${bearerToken}`,
+          'x-goog-user-project': 'gen-lang-client-0057994039',
         },
         body: JSON.stringify({
-          model: candidate.model,
-          messages,
-          temperature: 0.1,
-          response_format: { type: 'json_object' },
+          systemInstruction: systemMsg ? { parts: [{ text: systemMsg }] } : undefined,
+          contents: [{ role: 'user', parts: [{ text: userMsg }] }],
+          generationConfig: {
+            temperature: 0.1,
+            responseMimeType: 'application/json',
+          },
         }),
       });
       const data = await res.json();
       if (!res.ok) {
-        errors.push(`${candidate.provider} (${ res.status }): ${JSON.stringify(data).slice(0, 220)}`);
+        errors.push(`google-vertex/${modelName} (${res.status}): ${JSON.stringify(data).slice(0, 220)}`);
         continue;
       }
 
-      const content = data?.choices?.[0]?.message?.content || '{}';
+      const content = data?.candidates?.[0]?.content?.parts?.[0]?.text || '{}';
       let parsed = {};
       try {
         parsed = JSON.parse(content);
@@ -181,19 +160,19 @@ async function callHermesGoogleEndpoint(messages, modelOverride = null) {
       }
 
       return {
-        provider: candidate.provider,
-        endpoint: candidate.endpoint,
-        model: data?.model || candidate.model,
+        provider: 'google-vertex',
+        endpoint,
+        model: modelName,
         decision: parsed,
-        usage: data?.usage || null,
+        usage: data?.usageMetadata || null,
         fallback_trace: errors,
       };
     } catch (err) {
-      errors.push(`${candidate.provider}: ${err.message || String(err)}`);
+      errors.push(`google-vertex/${modelName}: ${err.message || String(err)}`);
     }
   }
 
-  throw new Error(`All Hermes Google endpoints failed: ${errors.join(' | ')}`);
+  throw new Error(`All Hermes Google Vertex endpoints failed: ${errors.join(' | ')}`);
 }
 
 function readBody(req) {

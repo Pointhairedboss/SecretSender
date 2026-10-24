@@ -420,6 +420,50 @@ async function run() {
     );
   }
 
+  // Optional EXT-08: Autonomous Hermes Google Vertex AI Browser Loop (--hermes)
+  const hermesMode = process.argv.includes('--hermes') || process.env.UAT_HERMES_LOOP === '1';
+  if (hermesMode) {
+    await check(
+      'EXT-08',
+      'Hermes Google Vertex Endpoint Loop -> S21: Cloud Run Reflector queries Google Vertex AI (hermes.yaml), drives headless Chromium to seal secret, and physical S21 decrypts it',
+      async () => {
+        const hermesSecret = `HERMES-VERTEX-${Date.now().toString(36).toUpperCase()}`;
+        const hermesPin = '774411';
+        const hermesSealed = await callExternalReflector({
+          action: 'hermes_uat',
+          password: hermesSecret,
+          unlockKey: hermesPin,
+        });
+        if (!hermesSealed.escrow_id) {
+          throw new Error(`Hermes Google Vertex loop did not produce an escrow_id: ${JSON.stringify(hermesSealed.hermes_llm)}`);
+        }
+
+        const claimUrl = `${PUBLIC_URL}/?escrow_id=${encodeURIComponent(hermesSealed.escrow_id)}&uat=1`;
+        await gotoS21(page, claimUrl);
+        await waitForUatIdle(page);
+        await fillS21(page, '#unlock', hermesPin);
+        await clickS21(page, '#reveal-btn');
+        const s21Decrypted = await waitForS21(
+          page,
+          () => document.getElementById('pw-display')?.textContent || null,
+          20000,
+          'Hermes Vertex secret decrypted on S21'
+        );
+        if (s21Decrypted !== hermesSecret) {
+          throw new Error(`S21 decrypted "${s21Decrypted}" != Hermes secret "${hermesSecret}"`);
+        }
+
+        return {
+          escrowId: hermesSealed.escrow_id,
+          hermesEndpoint: hermesSealed.hermes_llm?.endpoint,
+          hermesModel: hermesSealed.hermes_llm?.model,
+          hermesReasoning: hermesSealed.hermes_llm?.reasoning,
+          s21DecryptedMatches: true,
+        };
+      }
+    );
+  }
+
   await browser.close();
 
   const passed = results.filter((r) => r.status === 'PASS').length;
