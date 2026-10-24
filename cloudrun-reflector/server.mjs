@@ -562,6 +562,12 @@ async function handleReflect(body) {
         uatLog: window.__uatRecorder ? window.__uatRecorder.exportLog() : null,
       }));
 
+      let screenshotB64 = null;
+      if (body.screenshot) {
+        const buf = await page.screenshot({ type: 'png' });
+        screenshotB64 = buf.toString('base64');
+      }
+
       return {
         ok: true,
         action: 'hermes_uat',
@@ -580,6 +586,7 @@ async function handleReflect(body) {
         reveal_verified: afterOut.resultText.includes('YES (ML-DSA-44'),
         uat_state: afterOut.state,
         uat_log: afterOut.uatLog,
+        screenshot_b64: screenshotB64,
       };
     } finally {
       await browser.close();
@@ -587,6 +594,125 @@ async function handleReflect(body) {
   }
 
   throw new Error(`Unsupported reflector action: ${action}`);
+}
+
+function renderConsoleHtml(telemetry) {
+  return `<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="utf-8" />
+  <meta name="viewport" content="width=device-width, initial-scale=1" />
+  <title>BitBop Ephemeral Cloud Agent Reflector (GCP)</title>
+  <link rel="preconnect" href="https://fonts.googleapis.com" />
+  <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet" />
+  <style>
+    :root { --bg: #0F1012; --card: #16181D; --border: #262932; --gold: #FFD600; --emerald: #10B981; --text: #F1F5F9; --muted: #94A3B8; }
+    * { box-sizing: border-box; }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; padding: 24px; }
+    .wrap { max-width: 980px; margin: 0 auto; }
+    .hdr { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 20px; }
+    h1 { font-family: 'Space Grotesk', sans-serif; font-size: 1.35rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; color: var(--gold); }
+    .badge { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; padding: 5px 10px; border-radius: 6px; background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.4); color: var(--emerald); }
+    .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin-bottom: 20px; }
+    .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
+    .card h2 { font-family: 'Space Grotesk', sans-serif; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; color: var(--text); }
+    label { display: block; font-size: 0.78rem; text-transform: uppercase; color: var(--muted); margin: 10px 0 4px; font-family: 'JetBrains Mono', monospace; }
+    input, select, textarea { width: 100%; background: #0B0C0E; border: 1px solid var(--border); color: var(--text); padding: 10px; border-radius: 6px; font-family: 'JetBrains Mono', monospace; font-size: 0.85rem; }
+    button { margin-top: 14px; width: 100%; padding: 12px; border-radius: 8px; border: 1px solid var(--gold); background: var(--gold); color: #1A1600; font-family: 'Space Grotesk', sans-serif; font-weight: 700; text-transform: uppercase; letter-spacing: 0.05em; cursor: pointer; }
+    button:hover { background: #FFE14D; }
+    button:disabled { opacity: 0.5; cursor: wait; }
+    pre { background: #0B0C0E; border: 1px solid var(--border); border-radius: 8px; padding: 14px; overflow-x: auto; font-family: 'JetBrains Mono', monospace; font-size: 0.8rem; color: #CBD5E1; max-height: 420px; }
+    img.shot { width: 100%; border-radius: 8px; border: 1px solid var(--border); margin-top: 12px; display: none; }
+  </style>
+</head>
+<body>
+  <div class="wrap">
+    <div class="hdr">
+      <div>
+        <h1>BitBop Ephemeral Cloud Agent Reflector</h1>
+        <div style="font-size:0.82rem;color:var(--muted);margin-top:4px;">Scale-to-Zero Google Cloud Run (Playwright Chromium + WebRTC + ML-KEM-768 + Hermes Vertex AI)</div>
+      </div>
+      <div class="badge">● ${telemetry.colo} | Egress IP: ${telemetry.egressIp} | Rev: ${telemetry.revision}</div>
+    </div>
+
+    <div class="grid">
+      <div class="card">
+        <h2>1. Autonomous Hermes Vertex AI Loop</h2>
+        <label>Target URL</label>
+        <input id="h-url" value="https://secrets.bitbop.dev/?uat=1" />
+        <label>Secret to Seal (or Goal)</label>
+        <input id="h-secret" value="GCP-EPHEMERAL-AGENT-SECRET" />
+        <label>Unlock PIN</label>
+        <input id="h-pin" value="774411" />
+        <label>Vertex AI Model (hermes.yaml)</label>
+        <select id="h-model">
+          <option value="gemini-3.5-flash-lite">gemini-3.5-flash-lite (Fastest)</option>
+          <option value="gemini-3.8-flash">gemini-3.8-flash</option>
+          <option value="gemini-3.5-flash">gemini-3.5-flash</option>
+        </select>
+        <button id="btn-hermes" onclick="runHermes()">Run Hermes Agent in Cloud Chromium</button>
+      </div>
+
+      <div class="card">
+        <h2>2. Universal Multi-App Browser Session</h2>
+        <label>Target Web App (SecretSender / Dungeon P2P / Pooled)</label>
+        <input id="b-url" value="https://secrets.bitbop.dev/?uat=1" />
+        <button id="btn-session" onclick="runBrowserSession()">Open in Headless Cloud Chromium & Snapshot</button>
+        <button id="btn-ping" style="background:#1B1E24;color:#FFD600;margin-top:10px;" onclick="runPing()">Ping Container & Hermes Telemetry</button>
+      </div>
+    </div>
+
+    <div class="card">
+      <h2>Live Agent Output & Chromium Viewport</h2>
+      <img id="shot" class="shot" alt="Cloud Chromium Viewport" />
+      <pre id="out">${JSON.stringify(telemetry, null, 2)}</pre>
+    </div>
+  </div>
+  <script>
+    async function postReflect(payload, btnId) {
+      const btn = document.getElementById(btnId);
+      const out = document.getElementById('out');
+      const shot = document.getElementById('shot');
+      if (btn) btn.disabled = true;
+      out.textContent = 'Dispatching to Google Cloud Run container (' + payload.action + ')...';
+      try {
+        const r = await fetch('/reflect', { method: 'POST', headers: { 'Content-Type': 'application/json' }, body: JSON.stringify(payload) });
+        const d = await r.json();
+        if (d.screenshot_b64) {
+          shot.src = 'data:image/png;base64,' + d.screenshot_b64;
+          shot.style.display = 'block';
+          delete d.screenshot_b64;
+        }
+        out.textContent = JSON.stringify(d, null, 2);
+      } catch (e) {
+        out.textContent = 'Error: ' + e.message;
+      } finally {
+        if (btn) btn.disabled = false;
+      }
+    }
+    function runHermes() {
+      postReflect({
+        action: 'hermes_uat',
+        url: document.getElementById('h-url').value,
+        password: document.getElementById('h-secret').value,
+        unlockKey: document.getElementById('h-pin').value,
+        model: document.getElementById('h-model').value,
+        screenshot: true
+      }, 'btn-hermes');
+    }
+    function runBrowserSession() {
+      postReflect({
+        action: 'browser_session',
+        url: document.getElementById('b-url').value,
+        screenshot: true
+      }, 'btn-session');
+    }
+    function runPing() {
+      postReflect({ action: 'ping' }, 'btn-ping');
+    }
+  </script>
+</body>
+</html>`;
 }
 
 const server = http.createServer(async (req, res) => {
@@ -599,6 +725,16 @@ const server = http.createServer(async (req, res) => {
 
   if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/health')) {
     const telemetry = await getExternalTelemetry();
+    const wantsHtml =
+      u.pathname === '/' &&
+      u.searchParams.get('format') !== 'json' &&
+      String(req.headers.accept || '').includes('text/html');
+    if (wantsHtml) {
+      const html = renderConsoleHtml(telemetry);
+      res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
+      res.end(html);
+      return;
+    }
     sendJson(res, 200, {
       status: 'ok',
       service: 'bitbop-cloudrun-agent-reflector',
