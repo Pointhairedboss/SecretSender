@@ -5,6 +5,6 @@ export COLORTERM=truecolor
 export HERMES_MODEL="${HERMES_MODEL:-gemini-3.8-flash}"
 cd /app
 
-/usr/local/bin/hermes
+/usr/local/bin/hermes "$@"
 
 exec /bin/bash -i

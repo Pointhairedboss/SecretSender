@@ -619,6 +619,7 @@ function startTtydDaemon() {
       'ttyd',
       [
         '-W',
+        '-a',
         '-p',
         String(TTYD_PORT),
         '-b',
@@ -1022,10 +1023,59 @@ const server = http.createServer(async (req, res) => {
       const raw = await readBody(req);
       const parsed = raw ? JSON.parse(raw) : {};
       const cmd = String(parsed.command || '').trim();
+      const cardId = String(parsed.cardId || '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
       if (cmd) {
-        fs.writeFileSync('/tmp/hermes-inject.cmd', cmd + '\n', 'utf8');
+        const targetFile = cardId ? `/tmp/hermes-inject-${cardId}.cmd` : '/tmp/hermes-inject.cmd';
+        fs.writeFileSync(targetFile, cmd + '\n', 'utf8');
       }
-      sendJson(res, 200, { ok: true, injected: cmd });
+      sendJson(res, 200, { ok: true, cardId: cardId || null, injected: cmd });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  // Persistent Session Hydration API (/api/session-state)
+  if (req.method === 'GET' && u.pathname === '/api/session-state') {
+    try {
+      const cardId = String(u.searchParams.get('cardId') || '').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+      if (cardId) {
+        const file = `/tmp/hermes-session-${cardId}.json`;
+        if (fs.existsSync(file)) {
+          const state = JSON.parse(fs.readFileSync(file, 'utf8'));
+          sendJson(res, 200, { ok: true, cardId, state });
+        } else {
+          sendJson(res, 200, { ok: true, cardId, state: null });
+        }
+        return;
+      }
+      const files = fs.readdirSync('/tmp').filter((f) => f.startsWith('hermes-session-') && f.endsWith('.json'));
+      const sessions = {};
+      for (const f of files) {
+        try {
+          const parsed = JSON.parse(fs.readFileSync(`/tmp/${f}`, 'utf8'));
+          if (parsed && parsed.sessionId) {
+            sessions[parsed.sessionId] = parsed;
+          }
+        } catch {}
+      }
+      sendJson(res, 200, { ok: true, sessions });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
+
+  if (req.method === 'POST' && u.pathname === '/api/session-state') {
+    try {
+      const raw = await readBody(req);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const cardId = String(parsed.cardId || 'card-1').trim().replace(/[^a-zA-Z0-9_-]/g, '');
+      fs.writeFileSync('/tmp/hermes-next-session-id', cardId, 'utf8');
+      if (parsed.state && typeof parsed.state === 'object') {
+        fs.writeFileSync(`/tmp/hermes-session-${cardId}.json`, JSON.stringify(parsed.state, null, 2), 'utf8');
+      }
+      sendJson(res, 200, { ok: true, cardId });
     } catch (err) {
       sendJson(res, 500, { ok: false, error: err.message });
     }

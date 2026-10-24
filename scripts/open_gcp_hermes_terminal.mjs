@@ -1,24 +1,36 @@
 /**
- * BitBop Local Session Launchpad & Google Cloud IAM Controller (127.0.0.1:8889)
+ * BitBop Local Session Launchpad & $0.00 Persistent Context Controller (127.0.0.1:8889)
  *
  * Key Guarantees:
- *   1. DOM-Preserving Card Lifecycle: Spawning, expanding, pausing, or closing a Session Card
- *      modifies ONLY that card's DOM node (`appendChild` / `remove`), so existing `<iframe class="pty-frame">`
- *      instances are NEVER reloaded or cleared when you open additional cards.
- *   2. Per-Card Isolated WebSocket PTYs: Each card's `/terminal/?session=card-N` iframe tags its own
- *      WebSocket (`window.__ttydWs` + `/terminal/ws?session=card-N`), so macro buttons, Pause, and Close
- *      operate strictly on that single card without affecting any other open cards.
- *   3. Zero Idle Cost When Sleeping: With 0 live cards, 0 connections exist to Cloud Run ($0.00/hr).
+ *   1. $0.00 Local-to-Cloud Session Persistence:
+ *      - Every card's conversation history (`history[]`, tool outputs, active model, and title)
+ *        is synced from the Cloud Run container to `logs/hermes-sessions/<cardId>.json` on your PC.
+ *      - When you Pause a card (`⏸ Pause ($0)`), close the browser, or let Cloud Run scale to zero,
+ *        your context stays safely stored on local disk at $0.00/hr.
+ *      - When you click `▶ Resume` (even days later on a brand-new container instance), the local
+ *        proxy automatically pushes `<cardId>.json` to `POST /api/session-state` on Cloud Run before
+ *        the terminal connects — restoring full LLM memory and replaying your recent turns!
+ *   2. DOM-Preserving Card Lifecycle:
+ *      - Spawning, expanding, pausing, renaming, or closing a Card modifies ONLY that card's DOM node,
+ *        so other open cards are never reloaded or cleared.
  */
 
 import http from 'node:http';
 import https from 'node:https';
 import tls from 'node:tls';
+import fs from 'node:fs';
+import path from 'node:path';
+import { fileURLToPath } from 'node:url';
 import { execSync } from 'node:child_process';
+
+const __dirname = path.dirname(fileURLToPath(import.meta.url));
+const SESSIONS_DIR = path.resolve(__dirname, '..', 'logs', 'hermes-sessions');
+const INDEX_FILE = path.join(SESSIONS_DIR, 'cards-index.json');
+fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
 const CLOUD_RUN_HOST = process.env.CLOUD_RUN_HOST || 'uat-agent-reflector-vwn34fypca-ts.a.run.app';
 const LOCAL_PORT = Number(process.env.LOCAL_PROXY_PORT || 8889);
-const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS || 15 * 60 * 1000); // 15 minutes default
+const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS || 15 * 60 * 1000);
 const GCLOUD_BIN =
   process.env.GCLOUD_BIN ||
   `${process.env.LOCALAPPDATA}\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd`;
@@ -39,13 +51,122 @@ function getIdentityToken() {
   return cachedToken;
 }
 
+function getCardSessionPath(cardId) {
+  const safe = String(cardId || 'card-1').replace(/[^a-zA-Z0-9_-]/g, '');
+  return path.join(SESSIONS_DIR, `${safe}.json`);
+}
+
+function readLocalCardState(cardId) {
+  try {
+    const p = getCardSessionPath(cardId);
+    if (fs.existsSync(p)) {
+      return JSON.parse(fs.readFileSync(p, 'utf8'));
+    }
+  } catch {}
+  return null;
+}
+
+function writeLocalCardState(cardId, state) {
+  try {
+    if (!state || typeof state !== 'object') return;
+    fs.writeFileSync(getCardSessionPath(cardId), JSON.stringify(state, null, 2), 'utf8');
+  } catch {}
+}
+
+function readCardsIndex() {
+  try {
+    if (fs.existsSync(INDEX_FILE)) {
+      const parsed = JSON.parse(fs.readFileSync(INDEX_FILE, 'utf8'));
+      if (Array.isArray(parsed)) return parsed;
+    }
+  } catch {}
+  return [];
+}
+
+function writeCardsIndex(cards) {
+  try {
+    fs.writeFileSync(INDEX_FILE, JSON.stringify(cards, null, 2), 'utf8');
+  } catch {}
+}
+
+function cloudRunJsonRequest(method, reqPath, bodyObj = null) {
+  return new Promise((resolve) => {
+    let token = '';
+    try {
+      token = getIdentityToken();
+    } catch {
+      resolve(null);
+      return;
+    }
+    const payload = bodyObj ? Buffer.from(JSON.stringify(bodyObj), 'utf8') : null;
+    const req = https.request(
+      {
+        hostname: CLOUD_RUN_HOST,
+        port: 443,
+        path: reqPath,
+        method,
+        headers: {
+          Host: CLOUD_RUN_HOST,
+          Authorization: `Bearer ${token}`,
+          'Content-Type': 'application/json',
+          ...(payload ? { 'Content-Length': String(payload.length) } : {}),
+        },
+        timeout: 6000,
+      },
+      (res) => {
+        let data = '';
+        res.on('data', (c) => (data += c));
+        res.on('end', () => {
+          try {
+            resolve(data ? JSON.parse(data) : null);
+          } catch {
+            resolve(null);
+          }
+        });
+      }
+    );
+    req.on('error', () => resolve(null));
+    req.on('timeout', () => {
+      req.destroy();
+      resolve(null);
+    });
+    if (payload) req.write(payload);
+    req.end();
+  });
+}
+
+async function pushLocalSessionToCloudRun(cardId) {
+  const localState = readLocalCardState(cardId);
+  await cloudRunJsonRequest('POST', '/api/session-state', {
+    cardId,
+    state: localState,
+  });
+}
+
+async function pullCloudRunSessionsToDisk() {
+  if (activeSockets.size === 0) return;
+  const data = await cloudRunJsonRequest('GET', '/api/session-state');
+  if (data && data.ok && data.sessions && typeof data.sessions === 'object') {
+    for (const [cardId, state] of Object.entries(data.sessions)) {
+      if (state && Array.isArray(state.history) && state.history.length > 1) {
+        writeLocalCardState(cardId, state);
+      }
+    }
+  }
+}
+
+// Background sync: mirror active Cloud Run session histories to local disk every 3 seconds
+setInterval(() => {
+  pullCloudRunSessionsToDisk().catch(() => {});
+}, 3000);
+
 function renderLaunchpadHtml() {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BitBop Cloud Agent Launchpad — Session Card Controller</title>
+  <title>BitBop Cloud Agent Launchpad — Persistent Session Controller</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;500;600&family=JetBrains+Mono:wght@400;600;700&family=Space+Grotesk:wght@600;700&display=swap" rel="stylesheet" />
   <style>
@@ -100,7 +221,7 @@ function renderLaunchpadHtml() {
     }
     .brand p {
       margin: 4px 0 0;
-      font-size: 0.8rem;
+      font-size: 0.78rem;
       color: var(--muted);
       font-family: 'JetBrains Mono', monospace;
     }
@@ -112,7 +233,7 @@ function renderLaunchpadHtml() {
     }
     .pill {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.76rem;
+      font-size: 0.75rem;
       padding: 6px 12px;
       border-radius: 6px;
       border: 1px solid var(--border);
@@ -201,7 +322,7 @@ function renderLaunchpadHtml() {
     }
     .session-card.paused {
       border-color: var(--border);
-      opacity: 0.88;
+      opacity: 0.92;
     }
     .session-card.expanded {
       grid-column: 1 / -1;
@@ -219,7 +340,8 @@ function renderLaunchpadHtml() {
     .card-title {
       display: flex;
       align-items: center;
-      gap: 10px;
+      flex-wrap: wrap;
+      gap: 8px;
       font-family: 'Space Grotesk', sans-serif;
       font-size: 0.95rem;
       font-weight: 700;
@@ -239,8 +361,17 @@ function renderLaunchpadHtml() {
     }
     .card-meta {
       font-family: 'JetBrains Mono', monospace;
-      font-size: 0.73rem;
+      font-size: 0.72rem;
       color: var(--muted);
+    }
+    .saved-badge {
+      font-family: 'JetBrains Mono', monospace;
+      font-size: 0.7rem;
+      padding: 3px 8px;
+      border-radius: 4px;
+      background: rgba(16, 185, 129, 0.14);
+      border: 1px solid rgba(16, 185, 129, 0.4);
+      color: var(--emerald);
     }
     .card-controls {
       display: flex;
@@ -304,6 +435,8 @@ function renderLaunchpadHtml() {
       color: var(--muted);
       font-family: 'JetBrains Mono', monospace;
       font-size: 0.82rem;
+      padding: 20px;
+      text-align: center;
     }
     .empty-state {
       grid-column: 1 / -1;
@@ -334,12 +467,12 @@ function renderLaunchpadHtml() {
     <div class="topbar">
       <div class="brand">
         <h1>⚡ BitBop Ephemeral Cloud Agent Launchpad</h1>
-        <p>Local Session Controller (127.0.0.1:${LOCAL_PORT}) → IAM Tunnel (gavinrknight@gmail.com) → ${CLOUD_RUN_HOST}</p>
+        <p>Persistent Local Session Store (logs/hermes-sessions/) · IAM Locked (gavinrknight@gmail.com) → ${CLOUD_RUN_HOST}</p>
       </div>
       <div class="telemetry-pills">
         <div id="pill-state" class="pill zero">● SLEEPING (0 Active Cloud Sessions · $0.00/hr)</div>
         <div id="pill-sockets" class="pill">Open PTY Sockets: 0 / 10 per container</div>
-        <div class="pill">Idle Cut-off: 15m</div>
+        <div class="pill">💾 Persistence: $0.00 Local Disk Sync</div>
       </div>
     </div>
 
@@ -357,8 +490,8 @@ function renderLaunchpadHtml() {
       <button class="btn secondary" onclick="spawnSession({ title: 'Container Linux Bash Shell', initCmd: '/bash' })">
         + 🐚 Raw Bash Card
       </button>
-      <button class="btn danger" onclick="killAllSessions()">
-        🛑 Kill All Cards (Scale to $0)
+      <button class="btn danger" onclick="pauseAllSessions()">
+        ⏸ Pause All Cards (Save Context & Scale to $0)
       </button>
     </div>
 
@@ -375,6 +508,22 @@ function renderLaunchpadHtml() {
       return String(m).padStart(2, '0') + ':' + String(s).padStart(2, '0');
     }
 
+    function saveIndexToServer() {
+      const clean = sessions.map(s => ({
+        id: s.id,
+        num: s.num,
+        title: s.title,
+        status: s.status,
+        expanded: Boolean(s.expanded),
+        turnCount: s.turnCount || 0
+      }));
+      fetch('/local/save-index', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ cards: clean })
+      }).catch(() => {});
+    }
+
     function buildLiveBodyHtml(s) {
       return \`
         <div class="macro-bar">
@@ -386,15 +535,17 @@ function renderLaunchpadHtml() {
           <button class="chip" onclick="injectCommand('\${s.id}', '/reset')">🔄 /reset</button>
           <button class="chip" onclick="injectCommand('\${s.id}', '/bash')">🐚 /bash</button>
         </div>
-        <iframe id="iframe-\${s.id}" class="pty-frame" src="/terminal/?session=\${s.id}" allow="clipboard-read; clipboard-write"></iframe>
+        <iframe id="iframe-\${s.id}" class="pty-frame" src="/terminal/?session=\${s.id}&arg=\${s.id}" allow="clipboard-read; clipboard-write"></iframe>
       \`;
     }
 
     function buildPausedBodyHtml(s) {
+      const msgCount = s.turnCount || 0;
       return \`
         <div class="paused-placeholder">
-          <div>⏸ Session Card #\${s.num} is paused — WebSocket closed (0 CPU billed).</div>
-          <button class="btn" onclick="togglePause('\${s.id}')">▶ Resume Terminal Card</button>
+          <div>⏸ <strong>\${s.title} (\${s.id})</strong> is paused — Cloud Run WebSocket closed ($0.00/hr).</div>
+          <div style="color:var(--emerald);">💾 Saved Context on Local Disk: <strong>\${msgCount} conversation messages</strong> (will auto-hydrate into Cloud Run on Resume).</div>
+          <button class="btn" onclick="togglePause('\${s.id}')">▶ Resume Saved Session Card</button>
         </div>
       \`;
     }
@@ -408,9 +559,9 @@ function renderLaunchpadHtml() {
             <div id="empty-state-box" class="empty-state">
               <h3>● Zero Active Cloud Sessions — Cloud Run Scaled to $0.00/hr</h3>
               <p>
-                This Launchpad runs locally on <code>127.0.0.1:${LOCAL_PORT}</code> and costs nothing while open.
-                Click <strong>+ New Hermes Terminal Card</strong> above whenever you want to wake an ephemeral
-                Google Cloud Run session, and close or pause the card when done.
+                This Launchpad runs locally on <code>127.0.0.1:${LOCAL_PORT}</code> and persists your session histories
+                in <code>logs/hermes-sessions/</code> at $0.00 cost. Click <strong>+ New Hermes Terminal Card</strong>
+                above to launch a card.
               </p>
               <button class="btn" onclick="spawnSession({ title: 'Hermes Interactive Terminal' })">
                 + Launch Hermes Terminal Card Now
@@ -423,50 +574,70 @@ function renderLaunchpadHtml() {
       }
     }
 
-    function spawnSession(opts = {}) {
-      const id = 'card-' + (seq++);
-      const session = {
-        id,
-        num: seq - 1,
-        title: opts.title || 'Hermes Terminal',
-        status: 'live',
-        expanded: false,
-        createdAt: Date.now(),
-        initCmd: opts.initCmd || ''
-      };
-      sessions.push(session);
-      syncEmptyState();
-
-      // Append ONLY the new card DOM element so existing card iframes are NEVER touched or reloaded!
+    function mountCardDom(session) {
       const grid = document.getElementById('sessions-grid');
+      const isLive = session.status === 'live';
       const cardEl = document.createElement('div');
-      cardEl.className = 'session-card';
+      cardEl.className = 'session-card' + (isLive ? '' : ' paused') + (session.expanded ? ' expanded' : '');
       cardEl.id = 'wrap-' + session.id;
       cardEl.innerHTML = \`
         <div class="card-hdr">
           <div class="card-title">
-            <span id="dot-\${session.id}" class="status-dot"></span>
-            <span>CARD #\${session.num} · \${session.title}</span>
-            <span class="card-meta" id="timer-\${session.id}">LIVE (00:00)</span>
+            <span id="dot-\${session.id}" class="status-dot \${isLive ? '' : 'paused'}"></span>
+            <span id="title-\${session.id}">CARD #\${session.num} · \${session.title}</span>
+            <span class="saved-badge" id="saved-\${session.id}">💾 \${session.turnCount || 0} msgs saved</span>
+            <span class="card-meta" id="timer-\${session.id}">\${isLive ? 'LIVE (00:00)' : 'PAUSED ($0/hr)'}</span>
           </div>
           <div class="card-controls">
-            <button id="btn-exp-\${session.id}" class="chip" onclick="toggleExpand('\${session.id}')">⛶ Full Width</button>
-            <button id="btn-pause-\${session.id}" class="chip" onclick="togglePause('\${session.id}')">⏸ Pause ($0)</button>
-            <button class="chip kill" onclick="closeSession('\${session.id}')">✖ Close Card</button>
+            <button class="chip" onclick="renameCard('\${session.id}')">✏️ Rename</button>
+            <button id="btn-exp-\${session.id}" class="chip" onclick="toggleExpand('\${session.id}')">\${session.expanded ? '🗗 Side-by-Side' : '⛶ Full Width'}</button>
+            <button id="btn-pause-\${session.id}" class="chip" onclick="togglePause('\${session.id}')">\${isLive ? '⏸ Pause ($0)' : '▶ Resume'}</button>
+            <button class="chip kill" onclick="closeSession('\${session.id}')">🗑️ Delete Card</button>
           </div>
         </div>
         <div id="body-\${session.id}">
-          \${buildLiveBodyHtml(session)}
+          \${isLive ? buildLiveBodyHtml(session) : buildPausedBodyHtml(session)}
         </div>
       \`;
       grid.appendChild(cardEl);
+    }
 
-      if (session.initCmd) {
+    function spawnSession(opts = {}) {
+      const num = seq++;
+      const id = opts.id || ('card-' + num);
+      const session = {
+        id,
+        num: opts.num || num,
+        title: opts.title || 'Hermes Terminal',
+        status: opts.status || 'live',
+        expanded: Boolean(opts.expanded),
+        createdAt: Date.now(),
+        turnCount: opts.turnCount || 0,
+        initCmd: opts.initCmd || ''
+      };
+      sessions.push(session);
+      syncEmptyState();
+      mountCardDom(session);
+      saveIndexToServer();
+
+      if (session.status === 'live' && session.initCmd) {
         setTimeout(() => {
           injectCommand(id, session.initCmd);
         }, 2300);
       }
       setTimeout(refreshStatus, 400);
+    }
+
+    function renameCard(id) {
+      const s = sessions.find(x => x.id === id);
+      if (!s) return;
+      const next = prompt('Rename Session Card #' + s.num + ':', s.title);
+      if (next && next.trim()) {
+        s.title = next.trim();
+        const el = document.getElementById('title-' + id);
+        if (el) el.textContent = 'CARD #' + s.num + ' · ' + s.title;
+        saveIndexToServer();
+      }
     }
 
     async function togglePause(id) {
@@ -480,16 +651,16 @@ function renderLaunchpadHtml() {
       const body = document.getElementById('body-' + id);
 
       if (s.status === 'paused') {
-        if (wrap) wrap.classList.add('paused');
-        if (dot) dot.classList.add('paused');
-        if (timer) timer.textContent = 'PAUSED ($0/hr)';
-        if (btnPause) btnPause.textContent = '▶ Resume';
-        if (body) body.innerHTML = buildPausedBodyHtml(s);
         await fetch('/local/kill-card', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cardId: id })
         });
+        if (wrap) wrap.classList.add('paused');
+        if (dot) dot.classList.add('paused');
+        if (timer) timer.textContent = 'PAUSED ($0/hr)';
+        if (btnPause) btnPause.textContent = '▶ Resume';
+        if (body) body.innerHTML = buildPausedBodyHtml(s);
       } else {
         s.createdAt = Date.now();
         if (wrap) wrap.classList.remove('paused');
@@ -498,6 +669,7 @@ function renderLaunchpadHtml() {
         if (btnPause) btnPause.textContent = '⏸ Pause ($0)';
         if (body) body.innerHTML = buildLiveBodyHtml(s);
       }
+      saveIndexToServer();
       setTimeout(refreshStatus, 400);
     }
 
@@ -509,6 +681,7 @@ function renderLaunchpadHtml() {
       const btnExp = document.getElementById('btn-exp-' + id);
       if (wrap) wrap.classList.toggle('expanded', s.expanded);
       if (btnExp) btnExp.textContent = s.expanded ? '🗗 Side-by-Side' : '⛶ Full Width';
+      saveIndexToServer();
     }
 
     async function closeSession(id) {
@@ -516,19 +689,32 @@ function renderLaunchpadHtml() {
       const wrap = document.getElementById('wrap-' + id);
       if (wrap) wrap.remove();
       syncEmptyState();
+      saveIndexToServer();
       await fetch('/local/kill-card', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({ cardId: id })
+        body: JSON.stringify({ cardId: id, deleteDisk: true })
       });
       refreshStatus();
     }
 
-    async function killAllSessions() {
-      sessions = [];
-      const grid = document.getElementById('sessions-grid');
-      grid.innerHTML = '';
-      syncEmptyState();
+    async function pauseAllSessions() {
+      for (const s of sessions) {
+        if (s.status === 'live') {
+          s.status = 'paused';
+          const wrap = document.getElementById('wrap-' + s.id);
+          const dot = document.getElementById('dot-' + s.id);
+          const timer = document.getElementById('timer-' + s.id);
+          const btnPause = document.getElementById('btn-pause-' + s.id);
+          const body = document.getElementById('body-' + s.id);
+          if (wrap) wrap.classList.add('paused');
+          if (dot) dot.classList.add('paused');
+          if (timer) timer.textContent = 'PAUSED ($0/hr)';
+          if (btnPause) btnPause.textContent = '▶ Resume';
+          if (body) body.innerHTML = buildPausedBodyHtml(s);
+        }
+      }
+      saveIndexToServer();
       await fetch('/local/kill-all', { method: 'POST' });
       refreshStatus();
     }
@@ -536,7 +722,6 @@ function renderLaunchpadHtml() {
     async function injectCommand(cardId, cmd) {
       try {
         const iframe = document.getElementById('iframe-' + cardId);
-        // 1. Prefer direct per-card WebSocket frame injection into that card's own ttyd instance
         if (iframe && iframe.contentWindow && iframe.contentWindow.__ttydWs) {
           const ws = iframe.contentWindow.__ttydWs;
           if (ws.readyState === 1) {
@@ -546,8 +731,7 @@ function renderLaunchpadHtml() {
             return;
           }
         }
-        // 2. Fallback: ask local proxy to write into that card's tracked socket
-        await fetch('/local/inject-card', {
+        await fetch('/api/terminal-inject', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({ cardId, command: cmd })
@@ -579,7 +763,13 @@ function renderLaunchpadHtml() {
           pillState.textContent = '⚡ LIVE (' + liveCards + ' Card' + (liveCards === 1 ? '' : 's') + ' · ' + count + ' PTY · ' + containers + ' GCP Container · ~$' + rate + '/hr)';
         }
 
+        const savedCounts = d.saved_counts || {};
         for (const s of sessions) {
+          if (typeof savedCounts[s.id] === 'number') {
+            s.turnCount = savedCounts[s.id];
+            const savedEl = document.getElementById('saved-' + s.id);
+            if (savedEl) savedEl.textContent = '💾 ' + s.turnCount + ' msgs saved';
+          }
           const el = document.getElementById('timer-' + s.id);
           if (el && s.status === 'live') {
             const up = Math.floor((Date.now() - s.createdAt) / 1000);
@@ -589,7 +779,31 @@ function renderLaunchpadHtml() {
       } catch {}
     }
 
-    spawnSession({ title: 'Hermes Interactive Terminal' });
+    async function bootLaunchpad() {
+      try {
+        const r = await fetch('/local/status');
+        const d = await r.json();
+        const savedCards = Array.isArray(d.saved_index) ? d.saved_index : [];
+        const savedCounts = d.saved_counts || {};
+        if (savedCards.length > 0) {
+          for (const sc of savedCards) {
+            if (sc.num >= seq) seq = sc.num + 1;
+            spawnSession({
+              id: sc.id,
+              num: sc.num,
+              title: sc.title,
+              status: sc.status || 'live',
+              expanded: sc.expanded,
+              turnCount: savedCounts[sc.id] || sc.turnCount || 0
+            });
+          }
+          return;
+        }
+      } catch {}
+      spawnSession({ title: 'Hermes Interactive Terminal' });
+    }
+
+    bootLaunchpad();
     setInterval(refreshStatus, 2000);
   </script>
 </body>
@@ -610,10 +824,26 @@ function readJsonBody(req) {
   });
 }
 
+function getAllSavedCounts() {
+  const counts = {};
+  try {
+    const files = fs.readdirSync(SESSIONS_DIR).filter((f) => f.endsWith('.json') && f !== 'cards-index.json');
+    for (const f of files) {
+      try {
+        const parsed = JSON.parse(fs.readFileSync(path.join(SESSIONS_DIR, f), 'utf8'));
+        const id = f.replace(/\.json$/, '');
+        if (parsed && Array.isArray(parsed.history)) {
+          counts[id] = parsed.history.filter((m) => m.role === 'user' || (m.role === 'assistant' && m.content)).length;
+        }
+      } catch {}
+    }
+  } catch {}
+  return counts;
+}
+
 const server = http.createServer(async (req, res) => {
   const u = new URL(req.url || '/', `http://127.0.0.1:${LOCAL_PORT}`);
 
-  // 1. Local Launchpad UI & Session Control API
   if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/launchpad')) {
     const html = renderLaunchpadHtml();
     res.writeHead(200, { 'Content-Type': 'text/html; charset=utf-8', 'Cache-Control': 'no-store' });
@@ -628,6 +858,8 @@ const server = http.createServer(async (req, res) => {
         ok: true,
         active_sockets: activeSockets.size,
         cards: Array.from(activeSockets.values()).map((s) => ({ sockId: s.sockId, cardId: s.cardId })),
+        saved_index: readCardsIndex(),
+        saved_counts: getAllSavedCounts(),
         cloud_run_host: CLOUD_RUN_HOST,
         idle_timeout_ms: IDLE_TIMEOUT_MS,
       })
@@ -635,9 +867,21 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
+  if (req.method === 'POST' && u.pathname === '/local/save-index') {
+    const body = await readJsonBody(req);
+    if (Array.isArray(body.cards)) {
+      writeCardsIndex(body.cards);
+    }
+    res.writeHead(200, { 'Content-Type': 'application/json' });
+    res.end(JSON.stringify({ ok: true }));
+    return;
+  }
+
   if (req.method === 'POST' && u.pathname === '/local/kill-card') {
     const body = await readJsonBody(req);
     const targetCard = String(body.cardId || '');
+    // Sync latest state from Cloud Run to disk before closing socket!
+    await pullCloudRunSessionsToDisk().catch(() => {});
     let closed = 0;
     for (const [sockId, entry] of activeSockets.entries()) {
       if (entry.cardId === targetCard) {
@@ -649,12 +893,19 @@ const server = http.createServer(async (req, res) => {
         activeSockets.delete(sockId);
       }
     }
+    if (body.deleteDisk && targetCard) {
+      try {
+        const p = getCardSessionPath(targetCard);
+        if (fs.existsSync(p)) fs.unlinkSync(p);
+      } catch {}
+    }
     res.writeHead(200, { 'Content-Type': 'application/json' });
     res.end(JSON.stringify({ ok: true, cardId: targetCard, closed_sockets: closed }));
     return;
   }
 
   if (req.method === 'POST' && u.pathname === '/local/kill-all') {
+    await pullCloudRunSessionsToDisk().catch(() => {});
     let closed = 0;
     for (const [, entry] of activeSockets.entries()) {
       try {
@@ -669,7 +920,6 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // 2. Proxy Cloud Run endpoints (/terminal/*, /api/*, /reflect, /v1/*) with Google IAM Bearer Token
   let token = '';
   try {
     token = getIdentityToken();
@@ -679,8 +929,14 @@ const server = http.createServer(async (req, res) => {
     return;
   }
 
-  // Strip accept-encoding on /terminal/ HTML so we can inject the per-card WebSocket hook script cleanly
   const isTerminalHtml = u.pathname === '/terminal/';
+  const sessionParam = u.searchParams.get('session') || u.searchParams.get('arg') || '';
+
+  // Hydrate Cloud Run container with local saved session state BEFORE opening `/terminal/`!
+  if (isTerminalHtml && sessionParam) {
+    await pushLocalSessionToCloudRun(sessionParam).catch(() => {});
+  }
+
   const headers = { ...req.headers, host: CLOUD_RUN_HOST, Authorization: `Bearer ${token}` };
   if (isTerminalHtml) {
     delete headers['accept-encoding'];
@@ -701,7 +957,6 @@ const server = http.createServer(async (req, res) => {
         proxyRes.on('data', (c) => chunks.push(c));
         proxyRes.on('end', () => {
           let html = Buffer.concat(chunks).toString('utf8');
-          const sessionParam = u.searchParams.get('session') || '';
           const hookScript = `<script>
             (function() {
               const OrigWS = window.WebSocket;
@@ -738,7 +993,7 @@ const server = http.createServer(async (req, res) => {
   req.pipe(proxyReq);
 });
 
-server.on('upgrade', (req, clientSocket, head) => {
+server.on('upgrade', async (req, clientSocket, head) => {
   let token = '';
   try {
     token = getIdentityToken();
@@ -748,10 +1003,12 @@ server.on('upgrade', (req, clientSocket, head) => {
   }
 
   const u = new URL(req.url || '/', `http://127.0.0.1:${LOCAL_PORT}`);
-  const cardId = u.searchParams.get('session') || `anon-${nextSocketId}`;
-  // Strip ?session=... before forwarding to ttyd so ttyd sees exact `/terminal/ws`
-  const upstreamUrl = u.pathname;
+  const cardId = u.searchParams.get('session') || `card-1`;
 
+  // Ensure Cloud Run container has this card's persisted session state right before WebSocket PTY spawns
+  await pushLocalSessionToCloudRun(cardId).catch(() => {});
+
+  const upstreamUrl = u.pathname;
   const sockId = nextSocketId++;
   const upstream = tls.connect(
     {
@@ -780,17 +1037,21 @@ server.on('upgrade', (req, clientSocket, head) => {
       activeSockets.set(sockId, { sockId, cardId, client: clientSocket, upstream, createdAt: Date.now() });
 
       let idleTimer = setTimeout(() => {
-        console.log(`[Idle-Guard] Closing inactive PTY socket #${sockId} (${cardId}) after 15m of no input.`);
-        upstream.destroy();
-        clientSocket.destroy();
+        console.log(`[Idle-Guard] Saving context & closing inactive PTY socket #${sockId} (${cardId}) after 15m.`);
+        pullCloudRunSessionsToDisk().finally(() => {
+          upstream.destroy();
+          clientSocket.destroy();
+        });
       }, IDLE_TIMEOUT_MS);
 
       clientSocket.on('data', () => {
         clearTimeout(idleTimer);
         idleTimer = setTimeout(() => {
-          console.log(`[Idle-Guard] Closing inactive PTY socket #${sockId} (${cardId}) after 15m of no input.`);
-          upstream.destroy();
-          clientSocket.destroy();
+          console.log(`[Idle-Guard] Saving context & closing inactive PTY socket #${sockId} (${cardId}) after 15m.`);
+          pullCloudRunSessionsToDisk().finally(() => {
+            upstream.destroy();
+            clientSocket.destroy();
+          });
         }, IDLE_TIMEOUT_MS);
       });
 
@@ -832,9 +1093,9 @@ server.listen(LOCAL_PORT, '127.0.0.1', () => {
   console.log(`========================================================================`);
   console.log(`  BitBop Local Session Launchpad -> https://${CLOUD_RUN_HOST}`);
   console.log(`  Launchpad URL      : ${targetUrl}`);
+  console.log(`  Persistent Store   : ${SESSIONS_DIR}`);
   console.log(`  IAM Principal      : gavinrknight@gmail.com (roles/run.invoker)`);
-  console.log(`  Session Control    : Spawn, Pause, or Kill cards from the web UI`);
-  console.log(`  Idle Protection    : Auto-disconnects idle cards after 15m`);
+  console.log(`  Idle Protection    : Auto-saves & disconnects idle cards after 15m`);
   console.log(`========================================================================`);
   try {
     execSync(`start "" "${targetUrl}"`, { stdio: 'ignore' });
