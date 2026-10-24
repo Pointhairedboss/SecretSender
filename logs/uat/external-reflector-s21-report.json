@@ -1,52 +1,64 @@
 {
   "suite": "external-reflector-s21-split-horizon-uat",
-  "timestamp": "2026-10-24T02:49:18.112Z",
+  "timestamp": "2026-10-24T04:23:51.018Z",
   "publicTargetUrl": "https://secrets.bitbop.dev",
-  "reflectorUrl": "https://secrets.bitbop.dev/api/reflect",
+  "reflectorUrl": "https://uat-agent-reflector-vwn34fypca-ts.a.run.app/reflect",
   "s21DeviceSerial": "R5CR60QL05P",
   "externalReflectorTelemetry": {
-    "provider": "cloudflare-workers-edge",
-    "colo": "MEL",
-    "country": "AU",
-    "asn": 7545,
-    "asOrganization": "TPG Internet Pty Ltd",
-    "httpProtocol": "HTTP/1.1",
-    "tlsVersion": "TLSv1.3",
-    "clientIp": "61.68.234.228",
-    "rayId": "a4f5aa99cd791a6e",
-    "timestamp": "2026-10-24T02:49:06.864Z"
+    "provider": "google-cloud-run",
+    "service": "uat-agent-reflector",
+    "revision": "uat-agent-reflector-00002-9nf",
+    "region": "australia-southeast1",
+    "hostname": "localhost",
+    "egressIp": "34.34.245.63",
+    "colo": "GCP-australia-southeast1",
+    "hermes": {
+      "loaded": true,
+      "provider": "gemini",
+      "model": "gemini-2.5-flash",
+      "base_url": "https://generativelanguage.googleapis.com/v1beta",
+      "openai_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+      "api_key_configured": true
+    },
+    "timestamp": "2026-10-24T04:23:22.825Z"
   },
   "summary": {
-    "total": 6,
-    "passed": 6,
+    "total": 7,
+    "passed": 7,
     "failed": 0
   },
   "results": [
     {
       "id": "EXT-01",
-      "description": "External Agent Reflector responds from cloud edge with datacenter telemetry",
+      "description": "External Agent Reflector responds from cloud edge with datacenter & Hermes Google endpoint telemetry",
       "status": "PASS",
-      "ms": 139.2,
+      "ms": 223.5,
       "detail": {
-        "provider": "cloudflare-workers-edge",
-        "colo": "MEL",
-        "country": "AU",
-        "asn": 7545,
-        "asOrganization": "TPG Internet Pty Ltd",
-        "httpProtocol": "HTTP/1.1",
-        "tlsVersion": "TLSv1.3",
-        "clientIp": "61.68.234.228",
-        "rayId": "a4f5aa99cd791a6e",
-        "timestamp": "2026-10-24T02:49:06.864Z"
+        "provider": "google-cloud-run",
+        "service": "uat-agent-reflector",
+        "revision": "uat-agent-reflector-00002-9nf",
+        "region": "australia-southeast1",
+        "hostname": "localhost",
+        "egressIp": "34.34.245.63",
+        "colo": "GCP-australia-southeast1",
+        "hermes": {
+          "loaded": true,
+          "provider": "gemini",
+          "model": "gemini-2.5-flash",
+          "base_url": "https://generativelanguage.googleapis.com/v1beta",
+          "openai_base_url": "https://generativelanguage.googleapis.com/v1beta/openai",
+          "api_key_configured": true
+        },
+        "timestamp": "2026-10-24T04:23:22.825Z"
       }
     },
     {
       "id": "EXT-02",
       "description": "Outside -> S21: External Reflector seals secret in cloud; physical S21 claims, verifies ML-DSA-44 & decrypts via ML-KEM-768",
       "status": "PASS",
-      "ms": 2145.9,
+      "ms": 3712.8,
       "detail": {
-        "escrowId": "5f072a5e-86d4-4517-b19a-6b7613cd25e9",
+        "escrowId": "21cfe70b-017b-4b3b-88f7-f489e9a35546",
         "beaconSequence": 14428,
         "s21Viewport": "320px",
         "uatSummary": {
@@ -60,7 +72,7 @@
           "errors": 0,
           "holds": {
             "count": 2,
-            "maxMs": 275
+            "maxMs": 561
           }
         }
       }
@@ -69,7 +81,7 @@
       "id": "EXT-03",
       "description": "Outside -> S21: Reloading claimed URL on physical S21 enforces HTTP 409 Burn-on-Read",
       "status": "PASS",
-      "ms": 314.5,
+      "ms": 1965.3,
       "detail": {
         "burnedOnS21": true
       }
@@ -78,10 +90,10 @@
       "id": "EXT-04",
       "description": "S21 -> Outside: Physical S21 seals secret over HTTPS; External Reflector probes 403 wrong PIN, decrypts 200 via ML-KEM-768, verifies ML-DSA-44 & confirms 409 burn",
       "status": "PASS",
-      "ms": 1459.2,
+      "ms": 2965,
       "detail": {
-        "escrowId": "2841e0b2-1da1-44c5-944b-ff8ba2ed0391",
-        "reflectorColo": "MEL",
+        "escrowId": "0b395115-76b9-4145-bb66-02cc47760d4b",
+        "reflectorColo": "GCP-australia-southeast1",
         "wrongPinStatus": 403,
         "revealVerified": true,
         "burnRecheckStatus": 409,
@@ -92,7 +104,7 @@
       "id": "EXT-05",
       "description": "S21 -> Outside Burn Sync: Physical S21 opens the URL claimed by the External Reflector and confirms HTTP 409 Burned state",
       "status": "PASS",
-      "ms": 290.4,
+      "ms": 1681.2,
       "detail": {
         "s21ObservedBurned": true
       }
@@ -101,10 +113,40 @@
       "id": "EXT-06",
       "description": "Outside -> S21 Time-Lock: External Reflector seals 6s embargoed secret; S21 displays HH:MM:SS countdown (425) and auto-decrypts at 00:00:00",
       "status": "PASS",
-      "ms": 7203.2,
+      "ms": 6812.1,
       "detail": {
-        "escrowId": "d96a7895-97cc-4618-bd78-0b7b47780f84",
+        "escrowId": "e9242ec5-5885-40f8-ab22-179fd73720fa",
         "autoRevealedPlaintextMatches": true
+      }
+    },
+    {
+      "id": "EXT-07",
+      "description": "Multi-Agent Cloud Swarm: 3 parallel external agents (browser_seal + browser_claim) execute concurrently",
+      "status": "PASS",
+      "ms": 3382.5,
+      "detail": {
+        "concurrentAgents": 3,
+        "mode": "browser",
+        "swarmOutcomes": [
+          {
+            "agentId": 1,
+            "escrowId": "ef43cc18-c0c4-42ea-bbaf-eb2b8259b18e",
+            "verified": true,
+            "revision": "uat-agent-reflector-00002-9nf"
+          },
+          {
+            "agentId": 2,
+            "escrowId": "aa513a68-4c67-4bba-8ebb-6432c1bd3d5b",
+            "verified": true,
+            "revision": "uat-agent-reflector-00002-9nf"
+          },
+          {
+            "agentId": 3,
+            "escrowId": "4555b022-4049-4410-82ef-8424e151c680",
+            "verified": true,
+            "revision": "uat-agent-reflector-00002-9nf"
+          }
+        ]
       }
     }
   ]

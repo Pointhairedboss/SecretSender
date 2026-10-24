@@ -6,7 +6,7 @@ WORKDIR /app
 COPY package.json ./
 RUN npm install --omit=dev
 
-COPY server.mjs ./
+COPY server.mjs hermes.yaml ./
 
 ENV NODE_ENV=production
 ENV PORT=8080

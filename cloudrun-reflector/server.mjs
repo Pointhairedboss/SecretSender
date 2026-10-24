@@ -1,20 +1,21 @@
 /**
- * Google Cloud Run — Universal External Agent Reflector (Playwright Chromium + WebRTC + ML-KEM-768 + Hermes Loop)
+ * Google Cloud Run — Universal External Agent Reflector (Playwright Chromium + WebRTC + ML-KEM-768 + Hermes Google Loop)
  *
  * Endpoints:
- *   - GET  /health   -> Container liveness & GCP metadata
+ *   - GET  /health   -> Container liveness, GCP metadata, and loaded hermes.yaml Google endpoint telemetry
  *   - POST /reflect  -> Executes external agent actions:
- *       1. action: "ping"             -> Returns GCP region, revision, and external egress IP telemetry
+ *       1. action: "ping"             -> Returns GCP region, revision, egress IP, and hermes.yaml Google endpoint config
  *       2. action: "seal"             -> Seals a secret on SecretSender from GCP network (protocol mode)
  *       3. action: "claim"            -> Claims & decrypts a secret from GCP network via ML-KEM-768 + WebCrypto
  *       4. action: "browser_seal"     -> Launches real headless Chromium in GCP, seals secret via real DOM + __uatRecorder
  *       5. action: "browser_claim"    -> Launches real headless Chromium in GCP, claims & decrypts secret via real DOM + __uatRecorder
- *       6. action: "browser_session"  -> Runs an interactive/scripted or Hermes LLM-driven Playwright session on ANY URL
- *                                        (e.g. dungeon.bitbop.dev P2P room, pooled.run, secrets.bitbop.dev)
+ *       6. action: "browser_session"  -> Runs an interactive/scripted Playwright session on ANY URL
+ *       7. action: "hermes_uat"       -> Autonomous Hermes LLM-driven Playwright UAT loop powered by the Google endpoint in hermes.yaml
  */
 
 import http from 'node:http';
 import crypto from 'node:crypto';
+import fs from 'node:fs';
 import os from 'node:os';
 import { MlKem768 } from 'mlkem';
 import { chromium } from 'playwright';
@@ -23,6 +24,48 @@ const PORT = Number(process.env.PORT || 8080);
 const SECRETSENDER_ORIGIN = (process.env.SECRETSENDER_ORIGIN || 'https://secrets.bitbop.dev').replace(/\/+$/, '');
 const BITBOP_API_BASE = (process.env.BITBOP_API_BASE || 'https://api.bitbop.dev').replace(/\/+$/, '');
 const REFLECTOR_TOKEN = process.env.REFLECTOR_TOKEN ? process.env.REFLECTOR_TOKEN.trim() : '';
+
+/**
+ * Load & parse hermes.yaml (lightweight parser for the model/providers blocks so zero extra npm deps are needed)
+ */
+function loadHermesConfig() {
+  const hermesPath = new URL('./hermes.yaml', import.meta.url);
+  let raw = '';
+  try {
+    raw = fs.readFileSync(hermesPath, 'utf8');
+  } catch {
+    return {
+      loaded: false,
+      provider: 'gemini',
+      default_model: 'gemini-2.5-flash',
+      base_url: 'https://generativelanguage.googleapis.com/v1beta',
+      openai_base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
+      vertex_openai_base_url:
+        'https://australia-southeast1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/australia-southeast1/endpoints/openapi',
+    };
+  }
+
+  const getField = (key, fallback) => {
+    const m = raw.match(new RegExp(`^\\s*${key}:\\s*([^#\\r\\n]+)`, 'm'));
+    return m ? m[1].trim().replace(/^['"]|['"]$/g, '') : fallback;
+  };
+
+  return {
+    loaded: true,
+    config_version: Number(getField('_config_version', '50')),
+    provider: getField('provider', 'gemini'),
+    default_model: process.env.HERMES_MODEL || getField('default', 'gemini-2.5-flash'),
+    base_url: process.env.GEMINI_BASE_URL || getField('base_url', 'https://generativelanguage.googleapis.com/v1beta'),
+    openai_base_url:
+      process.env.GEMINI_OPENAI_BASE_URL ||
+      getField('openai_base_url', 'https://generativelanguage.googleapis.com/v1beta/openai'),
+    vertex_openai_base_url:
+      'https://australia-southeast1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/australia-southeast1/endpoints/openapi',
+    api_key_configured: Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
+  };
+}
+
+const HERMES_CONFIG = loadHermesConfig();
 
 let cachedEgressIp = null;
 
@@ -44,8 +87,113 @@ async function getExternalTelemetry() {
     hostname: os.hostname(),
     egressIp: cachedEgressIp || 'gcp-nat',
     colo: process.env.K_SERVICE ? `GCP-${process.env.CLOUD_RUN_REGION || 'SYD'}` : 'LOCAL-CONTAINER',
+    hermes: {
+      loaded: HERMES_CONFIG.loaded,
+      provider: HERMES_CONFIG.provider,
+      model: HERMES_CONFIG.default_model,
+      base_url: HERMES_CONFIG.base_url,
+      openai_base_url: HERMES_CONFIG.openai_base_url,
+      api_key_configured: Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
+    },
     timestamp: new Date().toISOString(),
   };
+}
+
+/**
+ * Calls the Google Gemini / Vertex AI OpenAI-compatible endpoint configured in hermes.yaml.
+ * Automatically falls back to Vertex AI (via Cloud Run's GCP Metadata Server OAuth token on
+ * project gen-lang-client-0057994039) if an AI Studio key returns HTTP 429/403 or is omitted.
+ */
+async function callHermesGoogleEndpoint(messages, modelOverride = null) {
+  const apiKey = (process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY || '').trim();
+  const baseModel = (modelOverride || HERMES_CONFIG.default_model || 'gemini-2.5-flash').replace(/^google\//, '');
+
+  const attempts = [];
+
+  // Attempt 1: Google AI Studio / Gemini OpenAI-compatible endpoint (if GOOGLE_API_KEY is present)
+  if (apiKey) {
+    attempts.push({
+      provider: 'gemini',
+      endpoint: `${HERMES_CONFIG.openai_base_url.replace(/\/+$/, '')}/chat/completions`,
+      model: baseModel,
+      getToken: async () => apiKey,
+    });
+  }
+
+  // Attempt 2: Google Cloud Vertex AI OpenAI-compatible endpoint (australia-southeast1 & us-central1) via GCP Metadata OAuth token
+  const getMetadataToken = async () => {
+    const metaRes = await fetch(
+      'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+      { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(3000) }
+    );
+    if (!metaRes.ok) {
+      throw new Error(`GCP Metadata token HTTP ${metaRes.status}`);
+    }
+    const tokenData = await metaRes.json();
+    return tokenData.access_token;
+  };
+
+  attempts.push(
+    {
+      provider: 'google-vertex-syd',
+      endpoint: `${HERMES_CONFIG.vertex_openai_base_url.replace(/\/+$/, '')}/chat/completions`,
+      model: `google/${baseModel}`,
+      getToken: getMetadataToken,
+    },
+    {
+      provider: 'google-vertex-us',
+      endpoint:
+        'https://us-central1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/us-central1/endpoints/openapi/chat/completions',
+      model: `google/${baseModel}`,
+      getToken: getMetadataToken,
+    }
+  );
+
+  const errors = [];
+  for (const candidate of attempts) {
+    try {
+      const bearerToken = await candidate.getToken();
+      const res = await fetch(candidate.endpoint, {
+        method: 'POST',
+        headers: {
+          'Content-Type': 'application/json',
+          Authorization: `Bearer ${bearerToken}`,
+        },
+        body: JSON.stringify({
+          model: candidate.model,
+          messages,
+          temperature: 0.1,
+          response_format: { type: 'json_object' },
+        }),
+      });
+      const data = await res.json();
+      if (!res.ok) {
+        errors.push(`${candidate.provider} (${ res.status }): ${JSON.stringify(data).slice(0, 220)}`);
+        continue;
+      }
+
+      const content = data?.choices?.[0]?.message?.content || '{}';
+      let parsed = {};
+      try {
+        parsed = JSON.parse(content);
+      } catch {
+        parsed = { raw: content };
+      }
+
+      return {
+        provider: candidate.provider,
+        endpoint: candidate.endpoint,
+        model: data?.model || candidate.model,
+        decision: parsed,
+        usage: data?.usage || null,
+        fallback_trace: errors,
+      };
+    } catch (err) {
+      errors.push(`${candidate.provider}: ${err.message || String(err)}`);
+    }
+  }
+
+  throw new Error(`All Hermes Google endpoints failed: ${errors.join(' | ')}`);
 }
 
 function readBody(req) {
@@ -124,7 +272,7 @@ async function handleReflect(body) {
 
   // 1. Ping
   if (action === 'ping') {
-    return { ok: true, action: 'ping', edge_telemetry: telemetry };
+    return { ok: true, action: 'ping', edge_telemetry: telemetry, hermes_config: HERMES_CONFIG };
   }
 
   // 2. Protocol-level Seal
@@ -356,6 +504,109 @@ async function handleReflect(body) {
     }
   }
 
+  // 7. Autonomous Hermes LLM-Driven UAT Loop (uses Google Gemini / Vertex endpoint from hermes.yaml)
+  if (action === 'hermes_uat') {
+    const goal =
+      body.goal ||
+      (body.escrow_id
+        ? `Claim and decrypt the secret for escrow_id=${body.escrow_id} using unlockKey="${body.unlock_key}" and verify ML-DSA-44 provenance.`
+        : `Seal secret "${body.password || 'HERMES-GEMINI-SECRET'}" with unlock PIN "${body.unlockKey || '778899'}" on SecretSender.`);
+    const startUrl = body.escrow_id
+      ? `${targetOrigin}/?escrow_id=${encodeURIComponent(body.escrow_id)}&uat=1`
+      : body.url || `${targetOrigin}/?uat=1`;
+
+    const browser = await launchReflectorBrowser();
+    try {
+      const context = await browser.newContext({ viewport: body.viewport || { width: 1280, height: 800 } });
+      const page = await context.newPage();
+      await page.goto(startUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await waitForUatIdle(page);
+
+      const snapshotBefore = await page.evaluate(() => ({
+        url: location.href,
+        title: document.title,
+        uatState: typeof window.__uatState === 'function' ? window.__uatState() : null,
+        controls: Array.from(document.querySelectorAll('input, textarea, button'))
+          .filter((el) => el.offsetParent !== null)
+          .map((el) => ({
+            id: el.id ? `#${el.id}` : el.tagName.toLowerCase(),
+            tag: el.tagName.toLowerCase(),
+            text: (el.innerText || el.placeholder || '').slice(0, 80),
+          })),
+      }));
+
+      const llmResponse = await callHermesGoogleEndpoint(
+        [
+          {
+            role: 'system',
+            content:
+              'You are a Hermes UAT Reflector Agent running inside Google Cloud Run. Given a browser DOM snapshot and a UAT goal, return a JSON object with {"reasoning": "...", "steps": [{"type": "fill"|"click", "selector": "#id", "value": "..."}]} using the exact element IDs present in controls.',
+          },
+          {
+            role: 'user',
+            content: JSON.stringify({ goal, snapshot: snapshotBefore }),
+          },
+        ],
+        body.model || null
+      );
+
+      const steps = Array.isArray(llmResponse.decision?.steps) ? llmResponse.decision.steps : [];
+      const executed = [];
+      for (const s of steps) {
+        if (s.type === 'fill' && s.selector) {
+          await page.fill(s.selector, String(s.value ?? ''));
+          executed.push(s);
+        } else if (s.type === 'click' && s.selector) {
+          await page.click(s.selector);
+          executed.push(s);
+        }
+        await waitForUatIdle(page);
+      }
+
+      if (body.escrow_id) {
+        await page.waitForSelector('#pw-display', { timeout: 20000 }).catch(() => {});
+      } else {
+        await page
+          .waitForFunction(
+            () => typeof window.__uatState === 'function' && Boolean(window.__uatState().escrowId),
+            undefined,
+            { timeout: 20000 }
+          )
+          .catch(() => {});
+      }
+      await waitForUatIdle(page);
+
+      const afterOut = await page.evaluate(() => ({
+        state: typeof window.__uatState === 'function' ? window.__uatState() : null,
+        decryptedPlaintext: document.getElementById('pw-display')?.textContent || null,
+        resultText: document.getElementById('result')?.innerText || '',
+        uatLog: window.__uatRecorder ? window.__uatRecorder.exportLog() : null,
+      }));
+
+      return {
+        ok: true,
+        action: 'hermes_uat',
+        edge_telemetry: telemetry,
+        hermes_llm: {
+          provider: HERMES_CONFIG.provider,
+          endpoint: llmResponse.endpoint,
+          model: llmResponse.model,
+          reasoning: llmResponse.decision?.reasoning || null,
+          planned_steps: steps,
+          executed_steps: executed,
+          usage: llmResponse.usage,
+        },
+        escrow_id: afterOut.state?.escrowId || body.escrow_id || null,
+        decrypted_plaintext: afterOut.decryptedPlaintext,
+        reveal_verified: afterOut.resultText.includes('YES (ML-DSA-44'),
+        uat_state: afterOut.state,
+        uat_log: afterOut.uatLog,
+      };
+    } finally {
+      await browser.close();
+    }
+  }
+
   throw new Error(`Unsupported reflector action: ${action}`);
 }
 
@@ -372,7 +623,8 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       status: 'ok',
       service: 'bitbop-cloudrun-agent-reflector',
-      capabilities: ['ping', 'seal', 'claim', 'browser_seal', 'browser_claim', 'browser_session'],
+      capabilities: ['ping', 'seal', 'claim', 'browser_seal', 'browser_claim', 'browser_session', 'hermes_uat'],
+      hermes_config: HERMES_CONFIG,
       edge_telemetry: telemetry,
     });
     return;
@@ -404,5 +656,7 @@ const server = http.createServer(async (req, res) => {
 });
 
 server.listen(PORT, '0.0.0.0', () => {
-  console.log(`[CloudRun-Reflector] Listening on http://0.0.0.0:${PORT}`);
+  console.log(
+    `[CloudRun-Reflector] Listening on http://0.0.0.0:${PORT} (Hermes provider=${HERMES_CONFIG.provider}, model=${HERMES_CONFIG.default_model}, endpoint=${HERMES_CONFIG.openai_base_url})`
+  );
 });

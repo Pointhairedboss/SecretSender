@@ -3,7 +3,7 @@
  *
  * Tests https://secrets.bitbop.dev end-to-end across two separate endpoints:
  *   - Peer A (Outside Network): External Agent Reflector running in the cloud
- *     (https://secrets.bitbop.dev/api/reflect or custom REFLECTOR_URL on Vercel / Cloud Run)
+ *     (Google Cloud Run `https://uat-agent-reflector-vwn34fypca-ts.a.run.app/reflect` or Cloudflare Edge `/api/reflect`)
  *   - Peer B (Physical Device): Samsung Galaxy S21 Ultra (R5CR60QL05P) running mobile Chrome
  *     hitting https://secrets.bitbop.dev directly over HTTPS (NO localhost / NO adb reverse!).
  *
@@ -26,22 +26,89 @@ const REFLECTOR_URL = process.env.UAT_REFLECTOR_URL || `${PUBLIC_URL}/api/reflec
 const S21_SERIAL = process.env.S21_SERIAL || 'R5CR60QL05P';
 const CDP_PORT = Number(process.env.S21_CDP_PORT || 9222);
 
+const sleep = (ms) => new Promise((r) => setTimeout(r, ms));
+
+function keepS21Awake() {
+  try {
+    execSync(`adb -s ${S21_SERIAL} shell "dumpsys deviceidle disable; svc power stayon true; input keyevent 224"`, {
+      stdio: 'ignore',
+    });
+  } catch {}
+}
+
 function prepareS21ForPublicHttps() {
   console.log(`[S21-External] Preparing physical Galaxy S21 Ultra (${S21_SERIAL}) for public HTTPS (${PUBLIC_URL})...`);
-  // Remove any localhost reverse tunnels so the phone must use real network routing to https://secrets.bitbop.dev
   try {
     execSync(`adb -s ${S21_SERIAL} reverse --remove-all`, { stdio: 'ignore' });
   } catch {}
   execSync(`adb -s ${S21_SERIAL} forward tcp:${CDP_PORT} localabstract:chrome_devtools_remote`, { stdio: 'inherit' });
+  keepS21Awake();
   try {
-    execSync(`adb -s ${S21_SERIAL} shell svc power stayon usb`, { stdio: 'ignore' });
-    execSync(`adb -s ${S21_SERIAL} shell input keyevent KEYCODE_WAKEUP`, { stdio: 'ignore' });
-    execSync(`adb -s ${S21_SERIAL} shell wm dismiss-keyguard`, { stdio: 'ignore' });
     execSync(
       `adb -s ${S21_SERIAL} shell am start -a android.intent.action.VIEW -d "${PUBLIC_URL}/?uat=1" com.android.chrome`,
       { stdio: 'ignore' }
     );
   } catch {}
+}
+
+async function gotoS21(page, url, timeoutMs = 25000) {
+  let lastErr = null;
+  for (let attempt = 1; attempt <= 5; attempt++) {
+    keepS21Awake();
+    try {
+      await page.goto(url, { waitUntil: 'domcontentloaded', timeout: timeoutMs });
+      return;
+    } catch (err) {
+      lastErr = err;
+      await sleep(1000);
+    }
+  }
+  throw lastErr;
+}
+
+async function fillS21(page, selector, value) {
+  await page.evaluate(
+    ({ sel, val }) => {
+      const el = document.querySelector(sel);
+      if (!el) throw new Error(`Element not found: ${sel}`);
+      el.value = val;
+      el.dispatchEvent(new Event('input', { bubbles: true }));
+      el.dispatchEvent(new Event('change', { bubbles: true }));
+    },
+    { sel: selector, val: String(value) }
+  );
+}
+
+async function clickS21(page, selector) {
+  await page.evaluate((sel) => {
+    const el = document.querySelector(sel);
+    if (!el) throw new Error(`Element not found: ${sel}`);
+    el.click();
+  }, selector);
+}
+
+async function waitForS21(page, pageFn, timeoutMs = 20000, label = 'condition') {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    try {
+      const val = await page.evaluate(pageFn);
+      if (val) return val;
+    } catch {}
+    await sleep(250);
+  }
+  throw new Error(`Timeout (${timeoutMs}ms) waiting for S21 ${label}`);
+}
+
+async function waitForUatIdle(page, timeoutMs = 15000) {
+  const start = Date.now();
+  while (Date.now() - start < timeoutMs) {
+    const busy = await page
+      .evaluate(() => (typeof window.__uatBusy === 'function' ? Boolean(window.__uatBusy()) : false))
+      .catch(() => false);
+    if (!busy) break;
+    await sleep(150);
+  }
+  await sleep(200);
 }
 
 async function callExternalReflector(payload) {
@@ -57,30 +124,26 @@ async function callExternalReflector(payload) {
   return data;
 }
 
-async function waitForUatIdle(page, timeoutMs = 15000) {
-  const start = Date.now();
-  while (Date.now() - start < timeoutMs) {
-    const busy = await page
-      .evaluate(() => (typeof window.__uatBusy === 'function' ? Boolean(window.__uatBusy()) : false))
-      .catch(() => false);
-    if (!busy) break;
-    await page.waitForTimeout(150);
-  }
-  await page.waitForTimeout(250);
-}
-
 async function run() {
   prepareS21ForPublicHttps();
-  await new Promise((r) => setTimeout(r, 1500));
+  await sleep(1200);
 
   const browser = await chromium.connectOverCDP(`http://127.0.0.1:${CDP_PORT}`);
   const context = browser.contexts()[0] || (await browser.newContext());
-  const page = context.pages()[0] || (await context.newPage());
+  const existingPages = context.pages();
+  while (existingPages.length > 1) {
+    const oldPage = existingPages.shift();
+    try {
+      await oldPage.close();
+    } catch {}
+  }
+  const page = existingPages[0] || (await context.newPage());
 
   const results = [];
   let externalTelemetry = null;
 
   async function check(id, description, fn) {
+    keepS21Awake();
     const t0 = performance.now();
     try {
       const detail = await fn();
@@ -107,7 +170,7 @@ async function run() {
   const extToS21Pin = '442288';
 
   // EXT-01: Probe External Agent Reflector in the Cloud
-  await check('EXT-01', 'External Agent Reflector responds from cloud edge with datacenter telemetry', async () => {
+  await check('EXT-01', 'External Agent Reflector responds from cloud edge with datacenter & Hermes Google endpoint telemetry', async () => {
     const ping = await callExternalReflector({ action: 'ping' });
     externalTelemetry = ping.edge_telemetry;
     if (!externalTelemetry || !externalTelemetry.provider) {
@@ -132,10 +195,9 @@ async function run() {
       }
 
       const claimUrlWithUat = `${extToS21Share.claim_url}&uat=1`;
-      await page.goto(claimUrlWithUat, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await gotoS21(page, claimUrlWithUat);
       await waitForUatIdle(page);
 
-      // Verify S21 is on public HTTPS origin and has 0px horizontal overflow
       const audit = await page.evaluate(() => ({
         origin: window.location.origin,
         vw: window.innerWidth,
@@ -149,10 +211,14 @@ async function run() {
         throw new Error(`Horizontal overflow on S21: ${audit.sw} > ${audit.vw}`);
       }
 
-      // Enter PIN on physical S21 and click Reveal / Decrypt
-      await page.fill('#unlock', extToS21Pin);
-      await page.click('#reveal-btn');
-      await page.waitForSelector('#pw-display', { timeout: 20000 });
+      await fillS21(page, '#unlock', extToS21Pin);
+      await clickS21(page, '#reveal-btn');
+      await waitForS21(
+        page,
+        () => Boolean(document.getElementById('pw-display')?.textContent),
+        20000,
+        '#pw-display decrypted plaintext'
+      );
       await waitForUatIdle(page);
 
       const s21Result = await page.evaluate(() => ({
@@ -180,15 +246,16 @@ async function run() {
   // EXT-03: Outside -> S21 Burn-on-Read (409 Conflict) on S21 reload
   await check('EXT-03', 'Outside -> S21: Reloading claimed URL on physical S21 enforces HTTP 409 Burn-on-Read', async () => {
     const claimUrlWithUat = `${extToS21Share.claim_url}&uat=1`;
-    await page.goto(claimUrlWithUat, { waitUntil: 'domcontentloaded', timeout: 25000 });
-    await page.waitForFunction(
+    await gotoS21(page, claimUrlWithUat);
+    await waitForS21(
+      page,
       () => {
         const st = typeof window.__uatState === 'function' ? window.__uatState() : null;
         const txt = document.getElementById('result')?.innerText || '';
         return (st && st.burned === true) || txt.includes('409');
       },
-      undefined,
-      { timeout: 15000 }
+      15000,
+      'burned 409 state'
     );
     const state = await page.evaluate(() => (typeof window.__uatState === 'function' ? window.__uatState() : null));
     return { burnedOnS21: state?.burned };
@@ -203,20 +270,21 @@ async function run() {
     'EXT-04',
     'S21 -> Outside: Physical S21 seals secret over HTTPS; External Reflector probes 403 wrong PIN, decrypts 200 via ML-KEM-768, verifies ML-DSA-44 & confirms 409 burn',
     async () => {
-      await page.goto(`${PUBLIC_URL}/?uat=1`, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await gotoS21(page, `${PUBLIC_URL}/?uat=1`);
       await waitForUatIdle(page);
 
-      await page.fill('#secret', s21ToExtSecret);
-      await page.fill('#pin', s21ToExtPin);
-      await page.click('#seal-btn');
+      await fillS21(page, '#secret', s21ToExtSecret);
+      await fillS21(page, '#pin', s21ToExtPin);
+      await clickS21(page, '#seal-btn');
 
-      await page.waitForFunction(
+      await waitForS21(
+        page,
         () => {
           const st = typeof window.__uatState === 'function' ? window.__uatState() : null;
           return st && Boolean(st.escrowId);
         },
-        undefined,
-        { timeout: 20000 }
+        20000,
+        'sealed escrowId on S21'
       );
       await waitForUatIdle(page);
 
@@ -229,7 +297,6 @@ async function run() {
         throw new Error('Failed to extract escrowId sealed on physical S21');
       }
 
-      // Dispatch to External Cloud Reflector to claim from outside the network!
       const reflectClaim = await callExternalReflector({
         action: 'claim',
         escrow_id: s21ToExtEscrowId,
@@ -268,18 +335,16 @@ async function run() {
     'EXT-05',
     'S21 -> Outside Burn Sync: Physical S21 opens the URL claimed by the External Reflector and confirms HTTP 409 Burned state',
     async () => {
-      await page.goto(`${PUBLIC_URL}/?escrow_id=${encodeURIComponent(s21ToExtEscrowId)}&uat=1`, {
-        waitUntil: 'domcontentloaded',
-        timeout: 25000,
-      });
-      await page.waitForFunction(
+      await gotoS21(page, `${PUBLIC_URL}/?escrow_id=${encodeURIComponent(s21ToExtEscrowId)}&uat=1`);
+      await waitForS21(
+        page,
         () => {
           const st = typeof window.__uatState === 'function' ? window.__uatState() : null;
           const txt = document.getElementById('result')?.innerText || '';
           return (st && st.burned === true) || txt.includes('409');
         },
-        undefined,
-        { timeout: 15000 }
+        15000,
+        'S21 observed 409 burned state'
       );
       const st = await page.evaluate(() => window.__uatState());
       return { s21ObservedBurned: st?.burned };
@@ -301,14 +366,15 @@ async function run() {
       });
 
       const claimUrl = `${sealed.share.claim_url}&uat=1`;
-      await page.goto(claimUrl, { waitUntil: 'domcontentloaded', timeout: 25000 });
+      await gotoS21(page, claimUrl);
+      await fillS21(page, '#unlock', timelockPin);
 
-      // Pre-enter PIN on S21 while countdown is active
-      await page.fill('#unlock', timelockPin);
-
-      // Wait for auto-reveal at 00:00:00
-      await page.waitForSelector('#pw-display', { timeout: 20000 });
-      const decrypted = await page.textContent('#pw-display');
+      const decrypted = await waitForS21(
+        page,
+        () => document.getElementById('pw-display')?.textContent || null,
+        20000,
+        'time-lock auto-reveal #pw-display'
+      );
       if (decrypted !== timelockSecret) {
         throw new Error(`Expected auto-revealed "${timelockSecret}", got "${decrypted}"`);
       }

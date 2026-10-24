@@ -1,0 +1,83 @@
+# Hermes Agent Configuration for Google Cloud Run Multi-Agent Reflector (uat-agent-reflector)
+# Project: gen-lang-client-0057994039 (australia-southeast1)
+# Schema: Hermes _config_version 50
+
+_config_version: 50
+
+model:
+  default: gemini-2.5-flash
+  provider: gemini
+  base_url: https://generativelanguage.googleapis.com/v1beta
+  openai_base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  api_mode: chat_completions
+  context_length: 1048576
+  max_tokens: 4096
+  persist_switch_by_default: true
+
+providers:
+  gemini:
+    name: Google AI Studio / Gemini Native & OpenAI-Compat
+    api: https://generativelanguage.googleapis.com/v1beta/openai
+    native_api: https://generativelanguage.googleapis.com/v1beta
+    api_key_env: GOOGLE_API_KEY
+    transport: chat_completions
+    default_model: gemini-2.5-flash
+    discover_models: true
+    context_length: 1048576
+    models:
+      gemini-2.5-flash:
+        context_length: 1048576
+      gemini-2.5-pro:
+        context_length: 1048576
+      gemini-3-flash-preview:
+        context_length: 1048576
+      gemini-3.1-pro-preview:
+        context_length: 1048576
+      gemini-2.5-flash-lite:
+        context_length: 1048576
+
+  google-vertex:
+    name: Google Cloud Vertex AI (australia-southeast1 OpenAI-Compatible Endpoint)
+    api: https://australia-southeast1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/australia-southeast1/endpoints/openapi
+    express_api: https://aiplatform.googleapis.com/v1beta1/publishers/google
+    auth_mode: gcp_metadata_or_api_key
+    transport: chat_completions
+    default_model: google/gemini-2.5-flash
+    discover_models: false
+    context_length: 1048576
+    models:
+      google/gemini-2.5-flash:
+        context_length: 1048576
+      google/gemini-2.5-pro:
+        context_length: 1048576
+
+model_aliases:
+  flash:
+    model: gemini-2.5-flash
+    provider: gemini
+  pro:
+    model: gemini-2.5-pro
+    provider: gemini
+  gemini3:
+    model: gemini-3-flash-preview
+    provider: gemini
+  vertex:
+    model: google/gemini-2.5-flash
+    provider: google-vertex
+
+fallback_providers:
+  - provider: gemini
+    model: gemini-2.5-flash-lite
+    base_url: https://generativelanguage.googleapis.com/v1beta/openai
+  - provider: google-vertex
+    model: google/gemini-2.5-flash
+    base_url: https://australia-southeast1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/australia-southeast1/endpoints/openapi
+
+agent:
+  max_turns: 30
+  uat_reflector:
+    enabled: true
+    default_target_origin: https://secrets.bitbop.dev
+    default_api_base: https://api.bitbop.dev
+    headless_browser: chromium
+    webrtc_enabled: true

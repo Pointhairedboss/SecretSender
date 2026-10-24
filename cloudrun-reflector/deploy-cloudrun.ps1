@@ -65,10 +65,16 @@ if (-not $ProjectId -or $ProjectId -eq "(unset)") {
 Write-Host "[3/5] Enabling Cloud Run, Cloud Build, and Artifact Registry APIs on project '$ProjectId'..." -ForegroundColor Cyan
 & $gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
 
+$envVars = "CLOUD_RUN_REGION=$Region,SECRETSENDER_ORIGIN=https://secrets.bitbop.dev,BITBOP_API_BASE=https://api.bitbop.dev,GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta,GEMINI_OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai,HERMES_MODEL=gemini-2.5-flash"
+if ($env:GOOGLE_API_KEY) {
+  $envVars = "$envVars,GOOGLE_API_KEY=$($env:GOOGLE_API_KEY)"
+}
+
 Write-Host "[4/5] Deploying '$ServiceName' to Google Cloud Run ($Region, scale-to-zero, max-instances=$MaxInstances)..." -ForegroundColor Cyan
 Push-Location $PSScriptRoot
 try {
   & $gcloud run deploy $ServiceName `
+    --quiet `
     --source . `
     --region $Region `
     --platform managed `
@@ -78,7 +84,7 @@ try {
     --timeout 300 `
     --min-instances 0 `
     --max-instances $MaxInstances `
-    --set-env-vars "CLOUD_RUN_REGION=$Region,SECRETSENDER_ORIGIN=https://secrets.bitbop.dev,BITBOP_API_BASE=https://api.bitbop.dev" `
+    --set-env-vars $envVars `
     --allow-unauthenticated
 } finally {
   Pop-Location
