@@ -316,6 +316,44 @@ async function run() {
     }
   );
 
+  // Optional EXT-07: Multi-Agent Concurrent Swarm (--swarm <N>)
+  const swarmArgIdx = process.argv.indexOf('--swarm');
+  const swarmCount = swarmArgIdx !== -1 ? Number(process.argv[swarmArgIdx + 1] || 4) : Number(process.env.UAT_SWARM_COUNT || 0);
+  const browserMode = process.argv.includes('--browser') || process.env.UAT_REFLECTOR_MODE === 'browser';
+
+  if (swarmCount > 0) {
+    await check(
+      'EXT-07',
+      `Multi-Agent Cloud Swarm: ${swarmCount} parallel external agents (${browserMode ? 'browser_seal + browser_claim' : 'seal + claim'}) execute concurrently`,
+      async () => {
+        const agents = Array.from({ length: swarmCount }, (_, idx) => idx + 1);
+        const swarmOutcomes = await Promise.all(
+          agents.map(async (agentId) => {
+            const secret = `SWARM-AGENT-${agentId}-${Date.now().toString(36).toUpperCase()}`;
+            const pin = String(100000 + agentId * 1111);
+            if (browserMode) {
+              const s = await callExternalReflector({ action: 'browser_seal', password: secret, unlockKey: pin });
+              const c = await callExternalReflector({ action: 'browser_claim', escrow_id: s.escrow_id, unlock_key: pin });
+              if (c.decrypted_plaintext !== secret) throw new Error(`Agent ${agentId} mismatch`);
+              return { agentId, escrowId: s.escrow_id, verified: c.reveal_verified, revision: c.edge_telemetry?.revision };
+            } else {
+              const s = await callExternalReflector({ action: 'seal', password: secret, unlockKey: pin });
+              const c = await callExternalReflector({
+                action: 'claim',
+                escrow_id: s.share.escrow_id,
+                unlock_key: pin,
+                test_wrong_pin: false,
+              });
+              if (c.decrypted_plaintext !== secret) throw new Error(`Agent ${agentId} mismatch`);
+              return { agentId, escrowId: s.share.escrow_id, verified: c.reveal_verified, colo: c.edge_telemetry?.colo };
+            }
+          })
+        );
+        return { concurrentAgents: swarmCount, mode: browserMode ? 'browser' : 'protocol', swarmOutcomes };
+      }
+    );
+  }
+
   await browser.close();
 
   const passed = results.filter((r) => r.status === 'PASS').length;
