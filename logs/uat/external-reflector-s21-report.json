@@ -1,0 +1,111 @@
+{
+  "suite": "external-reflector-s21-split-horizon-uat",
+  "timestamp": "2026-10-24T02:49:18.112Z",
+  "publicTargetUrl": "https://secrets.bitbop.dev",
+  "reflectorUrl": "https://secrets.bitbop.dev/api/reflect",
+  "s21DeviceSerial": "R5CR60QL05P",
+  "externalReflectorTelemetry": {
+    "provider": "cloudflare-workers-edge",
+    "colo": "MEL",
+    "country": "AU",
+    "asn": 7545,
+    "asOrganization": "TPG Internet Pty Ltd",
+    "httpProtocol": "HTTP/1.1",
+    "tlsVersion": "TLSv1.3",
+    "clientIp": "61.68.234.228",
+    "rayId": "a4f5aa99cd791a6e",
+    "timestamp": "2026-10-24T02:49:06.864Z"
+  },
+  "summary": {
+    "total": 6,
+    "passed": 6,
+    "failed": 0
+  },
+  "results": [
+    {
+      "id": "EXT-01",
+      "description": "External Agent Reflector responds from cloud edge with datacenter telemetry",
+      "status": "PASS",
+      "ms": 139.2,
+      "detail": {
+        "provider": "cloudflare-workers-edge",
+        "colo": "MEL",
+        "country": "AU",
+        "asn": 7545,
+        "asOrganization": "TPG Internet Pty Ltd",
+        "httpProtocol": "HTTP/1.1",
+        "tlsVersion": "TLSv1.3",
+        "clientIp": "61.68.234.228",
+        "rayId": "a4f5aa99cd791a6e",
+        "timestamp": "2026-10-24T02:49:06.864Z"
+      }
+    },
+    {
+      "id": "EXT-02",
+      "description": "Outside -> S21: External Reflector seals secret in cloud; physical S21 claims, verifies ML-DSA-44 & decrypts via ML-KEM-768",
+      "status": "PASS",
+      "ms": 2145.9,
+      "detail": {
+        "escrowId": "5f072a5e-86d4-4517-b19a-6b7613cd25e9",
+        "beaconSequence": 14428,
+        "s21Viewport": "320px",
+        "uatSummary": {
+          "minutes": 0,
+          "actions": 3,
+          "networkCalls": 3,
+          "networkStatuses": {
+            "200": 2,
+            "403": 1
+          },
+          "errors": 0,
+          "holds": {
+            "count": 2,
+            "maxMs": 275
+          }
+        }
+      }
+    },
+    {
+      "id": "EXT-03",
+      "description": "Outside -> S21: Reloading claimed URL on physical S21 enforces HTTP 409 Burn-on-Read",
+      "status": "PASS",
+      "ms": 314.5,
+      "detail": {
+        "burnedOnS21": true
+      }
+    },
+    {
+      "id": "EXT-04",
+      "description": "S21 -> Outside: Physical S21 seals secret over HTTPS; External Reflector probes 403 wrong PIN, decrypts 200 via ML-KEM-768, verifies ML-DSA-44 & confirms 409 burn",
+      "status": "PASS",
+      "ms": 1459.2,
+      "detail": {
+        "escrowId": "2841e0b2-1da1-44c5-944b-ff8ba2ed0391",
+        "reflectorColo": "MEL",
+        "wrongPinStatus": 403,
+        "revealVerified": true,
+        "burnRecheckStatus": 409,
+        "beaconSequence": 14428
+      }
+    },
+    {
+      "id": "EXT-05",
+      "description": "S21 -> Outside Burn Sync: Physical S21 opens the URL claimed by the External Reflector and confirms HTTP 409 Burned state",
+      "status": "PASS",
+      "ms": 290.4,
+      "detail": {
+        "s21ObservedBurned": true
+      }
+    },
+    {
+      "id": "EXT-06",
+      "description": "Outside -> S21 Time-Lock: External Reflector seals 6s embargoed secret; S21 displays HH:MM:SS countdown (425) and auto-decrypts at 00:00:00",
+      "status": "PASS",
+      "ms": 7203.2,
+      "detail": {
+        "escrowId": "d96a7895-97cc-4618-bd78-0b7b47780f84",
+        "autoRevealedPlaintextMatches": true
+      }
+    }
+  ]
+}

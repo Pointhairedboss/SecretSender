@@ -12,6 +12,7 @@
     "test": "node tests/e2e/runner.mjs",
     "uat:deterministic": "node scripts/run_s21_deterministic_uat.mjs",
     "uat:model": "node scripts/run_model_uat.mjs",
+    "uat:external": "node scripts/run_external_s21_reflector_uat.mjs",
     "uat": "node scripts/run_s21_deterministic_uat.mjs && node scripts/run_model_uat.mjs"
   },
   "dependencies": {
