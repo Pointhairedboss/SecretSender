@@ -3,9 +3,9 @@ FROM mcr.microsoft.com/playwright:v1.50.0-noble
 
 WORKDIR /app
 
-# Install ttyd (interactive web terminal over WebSocket)
+# Install ttyd (interactive web terminal over WebSocket) + DevSecOps diagnostic CLI suite
 RUN apt-get update && apt-get install -y --no-install-recommends \
-      curl ca-certificates procps && \
+      curl ca-certificates procps dnsutils openssl jq iputils-ping netcat-openbsd && \
     curl -fsSL "https://github.com/tsl0922/ttyd/releases/download/1.7.7/ttyd.x86_64" -o /usr/local/bin/ttyd && \
     chmod +x /usr/local/bin/ttyd && \
     rm -rf /var/lib/apt/lists/*

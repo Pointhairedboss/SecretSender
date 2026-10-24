@@ -602,10 +602,44 @@ const TTYD_PORT = 7681;
 
 function startTtydDaemon() {
   try {
-    const proc = spawn('ttyd', ['-W', '-p', String(TTYD_PORT), '-b', '/terminal', '/app/start-hermes-shell.sh'], {
-      stdio: 'ignore',
-      env: { ...process.env, TERM: 'xterm-256color' },
+    const xtermTheme = JSON.stringify({
+      background: '#0B0C0E',
+      foreground: '#F1F5F9',
+      cursor: '#FFD600',
+      selectionBackground: '#262932',
+      black: '#0F1012',
+      green: '#10B981',
+      yellow: '#FFD600',
+      blue: '#38BDF8',
+      magenta: '#C084FC',
+      cyan: '#2DD4BF',
+      red: '#F87171',
     });
+    const proc = spawn(
+      'ttyd',
+      [
+        '-W',
+        '-p',
+        String(TTYD_PORT),
+        '-b',
+        '/terminal',
+        '-t',
+        'fontSize=14',
+        '-t',
+        'fontFamily=JetBrains Mono, Consolas, monospace',
+        '-t',
+        'cursorBlink=true',
+        '-t',
+        'cursorStyle=bar',
+        '-t',
+        `theme=${xtermTheme}`,
+        '/app/start-hermes-shell.sh',
+      ],
+      {
+        stdio: 'ignore',
+        env: { ...process.env, TERM: 'xterm-256color', COLORTERM: 'truecolor', HERMES_MODEL: 'gemini-3.8-flash' },
+      }
+    );
     proc.on('error', (err) => {
       console.warn('[ttyd] Not started:', err.message);
     });
@@ -624,10 +658,11 @@ startTtydDaemon();
 async function handleVertexOpenAiChatCompletions(req, res) {
   const raw = await readBody(req);
   const body = raw ? JSON.parse(raw) : {};
-  const requestedModel = String(body.model || 'gemini-3.8-flash').replace(/^google\//, '');
-  const modelName = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemma-4-26b-a4b-it-maas'].includes(
-    requestedModel
-  )
+  let requestedModel = String(body.model || 'gemini-3.8-flash').trim().replace(/^google\//, '');
+  if (requestedModel === 'gemini-2.5-flash' || requestedModel === 'gemini-2.0-flash') {
+    requestedModel = 'gemini-3.8-flash';
+  }
+  const modelName = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite'].includes(requestedModel)
     ? requestedModel
     : 'gemini-3.8-flash';
 
@@ -655,18 +690,26 @@ async function handleVertexOpenAiChatCompletions(req, res) {
     if (m.role === 'system' || m.role === 'developer') {
       if (text) systemParts.push({ text });
     } else if (m.role === 'assistant') {
-      const parts = [];
-      if (text) parts.push({ text });
-      if (Array.isArray(m.tool_calls)) {
-        for (const tc of m.tool_calls) {
-          let args = {};
-          try {
-            args = JSON.parse(tc.function?.arguments || '{}');
-          } catch {}
-          parts.push({ functionCall: { name: tc.function?.name || 'tool', args } });
+      if (Array.isArray(m.vertex_parts) && m.vertex_parts.length > 0) {
+        contents.push({ role: 'model', parts: m.vertex_parts });
+      } else {
+        const parts = [];
+        if (text) parts.push({ text });
+        if (Array.isArray(m.tool_calls)) {
+          for (const tc of m.tool_calls) {
+            let args = {};
+            try {
+              args = JSON.parse(tc.function?.arguments || '{}');
+            } catch {}
+            const fcPart = { functionCall: { name: tc.function?.name || 'tool', args } };
+            if (tc.thought_signature) {
+              fcPart.thoughtSignature = tc.thought_signature;
+            }
+            parts.push(fcPart);
+          }
         }
+        if (parts.length) contents.push({ role: 'model', parts });
       }
-      if (parts.length) contents.push({ role: 'model', parts });
     } else if (m.role === 'tool') {
       contents.push({
         role: 'user',
@@ -690,6 +733,12 @@ async function handleVertexOpenAiChatCompletions(req, res) {
       temperature: typeof body.temperature === 'number' ? body.temperature : 0.2,
       maxOutputTokens: Number(body.max_tokens || 4096),
     },
+    safetySettings: [
+      { category: 'HARM_CATEGORY_DANGEROUS_CONTENT', threshold: 'OFF' },
+      { category: 'HARM_CATEGORY_HARASSMENT', threshold: 'OFF' },
+      { category: 'HARM_CATEGORY_HATE_SPEECH', threshold: 'OFF' },
+      { category: 'HARM_CATEGORY_SEXUALLY_EXPLICIT', threshold: 'OFF' },
+    ],
   };
   if (systemParts.length) {
     vertexPayload.systemInstruction = { parts: systemParts };
@@ -697,10 +746,16 @@ async function handleVertexOpenAiChatCompletions(req, res) {
   if (Array.isArray(body.tools) && body.tools.length > 0) {
     const fnDecls = body.tools
       .filter((t) => t.type === 'function' && t.function?.name)
-      .map((t) => ({
-        name: t.function.name,
-        description: t.function.description || '',
-      }));
+      .map((t) => {
+        const decl = {
+          name: t.function.name,
+          description: t.function.description || '',
+        };
+        if (t.function.parameters) {
+          decl.parameters = t.function.parameters;
+        }
+        return decl;
+      });
     if (fnDecls.length) {
       vertexPayload.tools = [{ functionDeclarations: fnDecls }];
     }
@@ -730,8 +785,9 @@ async function handleVertexOpenAiChatCompletions(req, res) {
   const toolCalls = candidateParts
     .filter((p) => p.functionCall)
     .map((p, idx) => ({
-      id: `call_${Date.now()}_${idx}`,
+      id: p.functionCall.id || `call_${Date.now()}_${idx}`,
       type: 'function',
+      thought_signature: p.thoughtSignature || null,
       function: {
         name: p.functionCall.name,
         arguments: JSON.stringify(p.functionCall.args || {}),
@@ -741,6 +797,7 @@ async function handleVertexOpenAiChatCompletions(req, res) {
   const msgObj = {
     role: 'assistant',
     content: textOut || (toolCalls.length ? null : ''),
+    vertex_parts: candidateParts,
   };
   if (toolCalls.length) {
     msgObj.tool_calls = toolCalls;
@@ -812,10 +869,14 @@ function renderConsoleHtml(telemetry) {
     h1 { font-family: 'Space Grotesk', sans-serif; font-size: 1.3rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; color: var(--gold); }
     .badge { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; padding: 5px 10px; border-radius: 6px; background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.4); color: var(--emerald); }
     .term-card { background: #0B0C0E; border: 1.5px solid var(--gold); border-radius: 10px; padding: 12px; margin-bottom: 18px; box-shadow: 0 0 24px rgba(255, 214, 0, 0.12); }
-    .term-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .term-hdr { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; }
     .term-hdr h2 { font-family: 'Space Grotesk', sans-serif; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0; color: var(--gold); }
+    .term-toolbar { display: flex; flex-wrap: wrap; gap: 8px; margin-bottom: 10px; padding-bottom: 10px; border-bottom: 1px solid var(--border); }
+    .chip-btn { margin: 0; width: auto; padding: 6px 11px; font-size: 0.74rem; border-radius: 6px; background: #16181D; color: var(--text); border: 1px solid var(--border); font-family: 'JetBrains Mono', monospace; text-transform: none; letter-spacing: 0; cursor: pointer; }
+    .chip-btn:hover { border-color: var(--gold); color: var(--gold); background: #1B1E24; }
+    .chip-btn.gold { background: rgba(255,214,0,0.14); border-color: var(--gold); color: var(--gold); font-weight: 700; }
     .btn-link { font-family: 'Space Grotesk', sans-serif; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; padding: 6px 12px; border-radius: 6px; background: var(--gold); color: #1A1600; text-decoration: none; }
-    iframe.term { width: 100%; height: 480px; border: 1px solid var(--border); border-radius: 8px; background: #000; }
+    iframe.term { width: 100%; height: 520px; border: 1px solid var(--border); border-radius: 8px; background: #0B0C0E; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin-bottom: 20px; }
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
     .card h2 { font-family: 'Space Grotesk', sans-serif; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; color: var(--text); }
@@ -840,10 +901,19 @@ function renderConsoleHtml(telemetry) {
 
     <div class="term-card">
       <div class="term-hdr">
-        <h2>Interactive Hermes Terminal (Live PTY inside Google Cloud Run)</h2>
+        <h2>Interactive Hermes Terminal (Live PTY inside Google Cloud Run · Vertex AI)</h2>
         <a class="btn-link" href="/terminal/" target="_blank">Open Full-Screen Hermes Terminal ↗</a>
       </div>
-      <iframe class="term" src="/terminal/" allow="clipboard-read; clipboard-write"></iframe>
+      <div class="term-toolbar">
+        <button class="chip-btn gold" onclick="injectTerm('/audit')">🛡️ Audit *.bitbop.dev Security/TLS</button>
+        <button class="chip-btn" onclick="injectTerm('Inspect DNS CAA,SPF,DMARC and TLS 1.3 ciphers for bitbop.dev and secrets.bitbop.dev')">🔍 DNS & TLS 1.3 Check</button>
+        <button class="chip-btn" onclick="injectTerm('/model gemini-3.8-flash')">⚡ Model: gemini-3.8-flash</button>
+        <button class="chip-btn" onclick="injectTerm('/model gemini-3.5-flash-lite')">🚀 Model: gemini-3.5-flash-lite</button>
+        <button class="chip-btn" onclick="injectTerm('/config')">📄 View hermes.yaml</button>
+        <button class="chip-btn" onclick="injectTerm('/reset')">🔄 Reset Context (/reset)</button>
+        <button class="chip-btn" onclick="injectTerm('/bash')">🐚 Drop to Bash (/bash)</button>
+      </div>
+      <iframe id="hermes-term-frame" class="term" src="/terminal/" allow="clipboard-read; clipboard-write"></iframe>
     </div>
 
     <div class="grid">
@@ -921,6 +991,19 @@ function renderConsoleHtml(telemetry) {
     function runPing() {
       postReflect({ action: 'ping' }, 'btn-ping');
     }
+    async function injectTerm(cmd) {
+      try {
+        await fetch('/api/terminal-inject', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify({ command: cmd })
+        });
+        const frame = document.getElementById('hermes-term-frame');
+        if (frame && frame.contentWindow) frame.contentWindow.focus();
+      } catch (e) {
+        console.error('Inject error:', e);
+      }
+    }
   </script>
 </body>
 </html>`;
@@ -933,6 +1016,21 @@ const server = http.createServer(async (req, res) => {
   }
 
   const u = new URL(req.url || '/', `http://localhost:${PORT}`);
+
+  if (req.method === 'POST' && u.pathname === '/api/terminal-inject') {
+    try {
+      const raw = await readBody(req);
+      const parsed = raw ? JSON.parse(raw) : {};
+      const cmd = String(parsed.command || '').trim();
+      if (cmd) {
+        fs.writeFileSync('/tmp/hermes-inject.cmd', cmd + '\n', 'utf8');
+      }
+      sendJson(res, 200, { ok: true, injected: cmd });
+    } catch (err) {
+      sendJson(res, 500, { ok: false, error: err.message });
+    }
+    return;
+  }
 
   // Proxy /terminal* HTTP requests to ttyd on 127.0.0.1:7681
   if (u.pathname === '/terminal' || u.pathname.startsWith('/terminal/')) {
