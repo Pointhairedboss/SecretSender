@@ -65,12 +65,12 @@ if (-not $ProjectId -or $ProjectId -eq "(unset)") {
 Write-Host "[3/5] Enabling Cloud Run, Cloud Build, and Artifact Registry APIs on project '$ProjectId'..." -ForegroundColor Cyan
 & $gcloud services enable run.googleapis.com cloudbuild.googleapis.com artifactregistry.googleapis.com
 
-$envVars = "CLOUD_RUN_REGION=$Region,SECRETSENDER_ORIGIN=https://secrets.bitbop.dev,BITBOP_API_BASE=https://api.bitbop.dev,GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta,GEMINI_OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai,HERMES_MODEL=gemini-2.5-flash"
+$envVars = "CLOUD_RUN_REGION=$Region,GCP_PROJECT_ID=$ProjectId,SECRETSENDER_ORIGIN=https://secrets.bitbop.dev,BITBOP_API_BASE=https://api.bitbop.dev,VERTEX_AI_GLOBAL_BASE=https://aiplatform.googleapis.com/v1beta1/projects/$ProjectId/locations/global/publishers/google,GEMINI_BASE_URL=https://generativelanguage.googleapis.com/v1beta,GEMINI_OPENAI_BASE_URL=https://generativelanguage.googleapis.com/v1beta/openai,HERMES_MODEL=gemini-3.8-flash,HERMES_FALLBACK_MODEL=gemini-3.5-flash-lite"
 if ($env:GOOGLE_API_KEY) {
   $envVars = "$envVars,GOOGLE_API_KEY=$($env:GOOGLE_API_KEY)"
 }
 
-Write-Host "[4/5] Deploying '$ServiceName' to Google Cloud Run ($Region, scale-to-zero, max-instances=$MaxInstances)..." -ForegroundColor Cyan
+Write-Host "[4/5] Deploying '$ServiceName' to Google Cloud Run ($Region, IAM-locked to $activeAccount, scale-to-zero, max-instances=$MaxInstances)..." -ForegroundColor Cyan
 Push-Location $PSScriptRoot
 try {
   & $gcloud run deploy $ServiceName `
@@ -80,12 +80,19 @@ try {
     --platform managed `
     --memory 2Gi `
     --cpu 2 `
-    --concurrency 1 `
+    --concurrency 10 `
     --timeout 300 `
     --min-instances 0 `
     --max-instances $MaxInstances `
     --set-env-vars $envVars `
-    --allow-unauthenticated
+    --no-allow-unauthenticated
+  $prevErr = $ErrorActionPreference
+  $ErrorActionPreference = "Continue"
+  try {
+    & $gcloud run services remove-iam-policy-binding $ServiceName --region=$Region --member="allUsers" --role="roles/run.invoker" --quiet 2>$null | Out-Null
+  } catch {}
+  $ErrorActionPreference = $prevErr
+  & $gcloud run services add-iam-policy-binding $ServiceName --region=$Region --member="user:$activeAccount" --role="roles/run.invoker" --quiet | Out-Null
 } finally {
   Pop-Location
 }

@@ -13,7 +13,8 @@
     "uat:deterministic": "node scripts/run_s21_deterministic_uat.mjs",
     "uat:model": "node scripts/run_model_uat.mjs",
     "uat:external": "node scripts/run_external_s21_reflector_uat.mjs",
-    "uat": "node scripts/run_s21_deterministic_uat.mjs && node scripts/run_model_uat.mjs"
+    "uat": "node scripts/run_s21_deterministic_uat.mjs && node scripts/run_model_uat.mjs",
+    "gcp:terminal": "node scripts/open_gcp_hermes_terminal.mjs"
   },
   "dependencies": {
     "mlkem": "^2.7.0"

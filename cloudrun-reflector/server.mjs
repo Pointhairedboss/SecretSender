@@ -14,6 +14,8 @@
  */
 
 import http from 'node:http';
+import net from 'node:net';
+import { spawn } from 'node:child_process';
 import crypto from 'node:crypto';
 import fs from 'node:fs';
 import os from 'node:os';
@@ -596,23 +598,224 @@ async function handleReflect(body) {
   throw new Error(`Unsupported reflector action: ${action}`);
 }
 
+const TTYD_PORT = 7681;
+
+function startTtydDaemon() {
+  try {
+    const proc = spawn('ttyd', ['-W', '-p', String(TTYD_PORT), '-b', '/terminal', '/app/start-hermes-shell.sh'], {
+      stdio: 'ignore',
+      env: { ...process.env, TERM: 'xterm-256color' },
+    });
+    proc.on('error', (err) => {
+      console.warn('[ttyd] Not started:', err.message);
+    });
+    proc.unref();
+  } catch (err) {
+    console.warn('[ttyd] Spawn skipped:', err.message);
+  }
+}
+startTtydDaemon();
+
+/**
+ * OpenAI-compatible /v1/chat/completions proxy for Hermes CLI inside the container.
+ * Translates OpenAI messages[] + tools[] into Google Cloud Vertex AI generateContent
+ * using the Cloud Run GCP Metadata Server OAuth token (billed to GCP credits on gen-lang-client-0057994039).
+ */
+async function handleVertexOpenAiChatCompletions(req, res) {
+  const raw = await readBody(req);
+  const body = raw ? JSON.parse(raw) : {};
+  const requestedModel = String(body.model || 'gemini-3.8-flash').replace(/^google\//, '');
+  const modelName = ['gemini-3.8-flash', 'gemini-3.5-flash', 'gemini-3.5-flash-lite', 'gemma-4-26b-a4b-it-maas'].includes(
+    requestedModel
+  )
+    ? requestedModel
+    : 'gemini-3.8-flash';
+
+  const metaRes = await fetch(
+    'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
+    { headers: { 'Metadata-Flavor': 'Google' }, signal: AbortSignal.timeout(3000) }
+  );
+  if (!metaRes.ok) {
+    sendJson(res, 500, { error: { message: `GCP Metadata token HTTP ${metaRes.status}` } });
+    return;
+  }
+  const { access_token: bearerToken } = await metaRes.json();
+
+  const messages = Array.isArray(body.messages) ? body.messages : [];
+  const systemParts = [];
+  const contents = [];
+
+  for (const m of messages) {
+    const text =
+      typeof m.content === 'string'
+        ? m.content
+        : Array.isArray(m.content)
+          ? m.content.map((c) => c.text || JSON.stringify(c)).join('\n')
+          : String(m.content ?? '');
+    if (m.role === 'system' || m.role === 'developer') {
+      if (text) systemParts.push({ text });
+    } else if (m.role === 'assistant') {
+      const parts = [];
+      if (text) parts.push({ text });
+      if (Array.isArray(m.tool_calls)) {
+        for (const tc of m.tool_calls) {
+          let args = {};
+          try {
+            args = JSON.parse(tc.function?.arguments || '{}');
+          } catch {}
+          parts.push({ functionCall: { name: tc.function?.name || 'tool', args } });
+        }
+      }
+      if (parts.length) contents.push({ role: 'model', parts });
+    } else if (m.role === 'tool') {
+      contents.push({
+        role: 'user',
+        parts: [
+          {
+            functionResponse: {
+              name: m.name || 'tool_result',
+              response: { result: text },
+            },
+          },
+        ],
+      });
+    } else {
+      contents.push({ role: 'user', parts: [{ text: text || ' ' }] });
+    }
+  }
+
+  const vertexPayload = {
+    contents: contents.length ? contents : [{ role: 'user', parts: [{ text: 'Hello' }] }],
+    generationConfig: {
+      temperature: typeof body.temperature === 'number' ? body.temperature : 0.2,
+      maxOutputTokens: Number(body.max_tokens || 4096),
+    },
+  };
+  if (systemParts.length) {
+    vertexPayload.systemInstruction = { parts: systemParts };
+  }
+  if (Array.isArray(body.tools) && body.tools.length > 0) {
+    const fnDecls = body.tools
+      .filter((t) => t.type === 'function' && t.function?.name)
+      .map((t) => ({
+        name: t.function.name,
+        description: t.function.description || '',
+      }));
+    if (fnDecls.length) {
+      vertexPayload.tools = [{ functionDeclarations: fnDecls }];
+    }
+  }
+
+  const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google/models/${modelName}:generateContent`;
+  const vRes = await fetch(endpoint, {
+    method: 'POST',
+    headers: {
+      'Content-Type': 'application/json',
+      Authorization: `Bearer ${bearerToken}`,
+      'x-goog-user-project': 'gen-lang-client-0057994039',
+    },
+    body: JSON.stringify(vertexPayload),
+  });
+  const vData = await vRes.json();
+  if (!vRes.ok) {
+    sendJson(res, vRes.status, { error: { message: JSON.stringify(vData) } });
+    return;
+  }
+
+  const candidateParts = vData?.candidates?.[0]?.content?.parts || [];
+  const textOut = candidateParts
+    .filter((p) => typeof p.text === 'string')
+    .map((p) => p.text)
+    .join('');
+  const toolCalls = candidateParts
+    .filter((p) => p.functionCall)
+    .map((p, idx) => ({
+      id: `call_${Date.now()}_${idx}`,
+      type: 'function',
+      function: {
+        name: p.functionCall.name,
+        arguments: JSON.stringify(p.functionCall.args || {}),
+      },
+    }));
+
+  const msgObj = {
+    role: 'assistant',
+    content: textOut || (toolCalls.length ? null : ''),
+  };
+  if (toolCalls.length) {
+    msgObj.tool_calls = toolCalls;
+  }
+
+  const id = `chatcmpl-${Date.now()}`;
+  const created = Math.floor(Date.now() / 1000);
+
+  if (body.stream) {
+    res.writeHead(200, {
+      'Content-Type': 'text/event-stream; charset=utf-8',
+      'Cache-Control': 'no-cache',
+      Connection: 'keep-alive',
+    });
+    const chunk = {
+      id,
+      object: 'chat.completion.chunk',
+      created,
+      model: modelName,
+      choices: [
+        {
+          index: 0,
+          delta: msgObj,
+          finish_reason: toolCalls.length ? 'tool_calls' : 'stop',
+        },
+      ],
+    };
+    res.write(`data: ${JSON.stringify(chunk)}\n\n`);
+    res.write('data: [DONE]\n\n');
+    res.end();
+    return;
+  }
+
+  sendJson(res, 200, {
+    id,
+    object: 'chat.completion',
+    created,
+    model: modelName,
+    choices: [
+      {
+        index: 0,
+        message: msgObj,
+        finish_reason: toolCalls.length ? 'tool_calls' : 'stop',
+      },
+    ],
+    usage: {
+      prompt_tokens: vData?.usageMetadata?.promptTokenCount || 0,
+      completion_tokens: vData?.usageMetadata?.candidatesTokenCount || 0,
+      total_tokens: vData?.usageMetadata?.totalTokenCount || 0,
+    },
+  });
+}
+
 function renderConsoleHtml(telemetry) {
   return `<!DOCTYPE html>
 <html lang="en">
 <head>
   <meta charset="utf-8" />
   <meta name="viewport" content="width=device-width, initial-scale=1" />
-  <title>BitBop Ephemeral Cloud Agent Reflector (GCP)</title>
+  <title>BitBop Ephemeral Cloud Agent & Hermes Terminal (GCP)</title>
   <link rel="preconnect" href="https://fonts.googleapis.com" />
   <link href="https://fonts.googleapis.com/css2?family=Inter:wght@400;600&family=JetBrains+Mono:wght@400;700&family=Space+Grotesk:wght@700&display=swap" rel="stylesheet" />
   <style>
     :root { --bg: #0F1012; --card: #16181D; --border: #262932; --gold: #FFD600; --emerald: #10B981; --text: #F1F5F9; --muted: #94A3B8; }
     * { box-sizing: border-box; }
-    body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; padding: 24px; }
-    .wrap { max-width: 980px; margin: 0 auto; }
-    .hdr { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 16px; margin-bottom: 20px; }
-    h1 { font-family: 'Space Grotesk', sans-serif; font-size: 1.35rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; color: var(--gold); }
+    body { margin: 0; background: var(--bg); color: var(--text); font-family: 'Inter', system-ui, sans-serif; padding: 20px; }
+    .wrap { max-width: 1120px; margin: 0 auto; }
+    .hdr { display: flex; justify-content: space-between; align-items: center; flex-wrap: wrap; gap: 12px; border-bottom: 1px solid var(--border); padding-bottom: 14px; margin-bottom: 18px; }
+    h1 { font-family: 'Space Grotesk', sans-serif; font-size: 1.3rem; text-transform: uppercase; letter-spacing: 0.06em; margin: 0; color: var(--gold); }
     .badge { font-family: 'JetBrains Mono', monospace; font-size: 0.78rem; padding: 5px 10px; border-radius: 6px; background: rgba(16,185,129,0.12); border: 1px solid rgba(16,185,129,0.4); color: var(--emerald); }
+    .term-card { background: #0B0C0E; border: 1.5px solid var(--gold); border-radius: 10px; padding: 12px; margin-bottom: 18px; box-shadow: 0 0 24px rgba(255, 214, 0, 0.12); }
+    .term-hdr { display: flex; justify-content: space-between; align-items: center; margin-bottom: 10px; }
+    .term-hdr h2 { font-family: 'Space Grotesk', sans-serif; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0; color: var(--gold); }
+    .btn-link { font-family: 'Space Grotesk', sans-serif; font-size: 0.78rem; font-weight: 700; text-transform: uppercase; padding: 6px 12px; border-radius: 6px; background: var(--gold); color: #1A1600; text-decoration: none; }
+    iframe.term { width: 100%; height: 480px; border: 1px solid var(--border); border-radius: 8px; background: #000; }
     .grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(290px, 1fr)); gap: 16px; margin-bottom: 20px; }
     .card { background: var(--card); border: 1px solid var(--border); border-radius: 10px; padding: 18px; }
     .card h2 { font-family: 'Space Grotesk', sans-serif; font-size: 0.95rem; text-transform: uppercase; letter-spacing: 0.05em; margin: 0 0 12px; color: var(--text); }
@@ -629,10 +832,18 @@ function renderConsoleHtml(telemetry) {
   <div class="wrap">
     <div class="hdr">
       <div>
-        <h1>BitBop Ephemeral Cloud Agent Reflector</h1>
-        <div style="font-size:0.82rem;color:var(--muted);margin-top:4px;">Scale-to-Zero Google Cloud Run (Playwright Chromium + WebRTC + ML-KEM-768 + Hermes Vertex AI)</div>
+        <h1>BitBop Ephemeral Cloud Agent & Hermes Terminal</h1>
+        <div style="font-size:0.82rem;color:var(--muted);margin-top:4px;">Scale-to-Zero Google Cloud Run (Interactive Hermes CLI + Playwright Chromium + Vertex AI)</div>
       </div>
       <div class="badge">● ${telemetry.colo} | Egress IP: ${telemetry.egressIp} | Rev: ${telemetry.revision}</div>
+    </div>
+
+    <div class="term-card">
+      <div class="term-hdr">
+        <h2>Interactive Hermes Terminal (Live PTY inside Google Cloud Run)</h2>
+        <a class="btn-link" href="/terminal/" target="_blank">Open Full-Screen Hermes Terminal ↗</a>
+      </div>
+      <iframe class="term" src="/terminal/" allow="clipboard-read; clipboard-write"></iframe>
     </div>
 
     <div class="grid">
@@ -723,6 +934,56 @@ const server = http.createServer(async (req, res) => {
 
   const u = new URL(req.url || '/', `http://localhost:${PORT}`);
 
+  // Proxy /terminal* HTTP requests to ttyd on 127.0.0.1:7681
+  if (u.pathname === '/terminal' || u.pathname.startsWith('/terminal/')) {
+    if (u.pathname === '/terminal') {
+      res.writeHead(302, { Location: '/terminal/' });
+      res.end();
+      return;
+    }
+    const proxyReq = http.request(
+      {
+        hostname: '127.0.0.1',
+        port: TTYD_PORT,
+        path: u.pathname + u.search,
+        method: req.method,
+        headers: req.headers,
+      },
+      (proxyRes) => {
+        res.writeHead(proxyRes.statusCode || 200, proxyRes.headers);
+        proxyRes.pipe(res);
+      }
+    );
+    proxyReq.on('error', (err) => {
+      sendJson(res, 502, { ok: false, error: `Hermes terminal daemon (ttyd) error: ${err.message}` });
+    });
+    req.pipe(proxyReq);
+    return;
+  }
+
+  // OpenAI-compatible /v1/* endpoints for local Hermes CLI inside the container
+  if (req.method === 'GET' && u.pathname === '/v1/models') {
+    sendJson(res, 200, {
+      object: 'list',
+      data: [
+        { id: 'gemini-3.8-flash', object: 'model', owned_by: 'google-vertex' },
+        { id: 'gemini-3.5-flash', object: 'model', owned_by: 'google-vertex' },
+        { id: 'gemini-3.5-flash-lite', object: 'model', owned_by: 'google-vertex' },
+        { id: 'gemma-4-26b-a4b-it-maas', object: 'model', owned_by: 'google-vertex' },
+      ],
+    });
+    return;
+  }
+
+  if (req.method === 'POST' && u.pathname === '/v1/chat/completions') {
+    try {
+      await handleVertexOpenAiChatCompletions(req, res);
+    } catch (err) {
+      sendJson(res, 500, { error: { message: err.message || String(err) } });
+    }
+    return;
+  }
+
   if (req.method === 'GET' && (u.pathname === '/' || u.pathname === '/health')) {
     const telemetry = await getExternalTelemetry();
     const wantsHtml =
@@ -738,7 +999,7 @@ const server = http.createServer(async (req, res) => {
     sendJson(res, 200, {
       status: 'ok',
       service: 'bitbop-cloudrun-agent-reflector',
-      capabilities: ['ping', 'seal', 'claim', 'browser_seal', 'browser_claim', 'browser_session', 'hermes_uat'],
+      capabilities: ['ping', 'seal', 'claim', 'browser_seal', 'browser_claim', 'browser_session', 'hermes_uat', 'terminal'],
       hermes_config: HERMES_CONFIG,
       edge_telemetry: telemetry,
     });
@@ -768,6 +1029,29 @@ const server = http.createServer(async (req, res) => {
   }
 
   sendJson(res, 404, { ok: false, error: 'Not found' });
+});
+
+// Proxy WebSocket upgrades (/terminal/ws) directly to ttyd on 127.0.0.1:7681
+server.on('upgrade', (req, clientSocket, head) => {
+  const u = new URL(req.url || '/', `http://localhost:${PORT}`);
+  if (!u.pathname.startsWith('/terminal')) {
+    clientSocket.destroy();
+    return;
+  }
+
+  const upstream = net.connect(TTYD_PORT, '127.0.0.1', () => {
+    let rawReq = `${req.method} ${req.url} HTTP/${req.httpVersion}\r\n`;
+    for (let i = 0; i < req.rawHeaders.length; i += 2) {
+      rawReq += `${req.rawHeaders[i]}: ${req.rawHeaders[i + 1]}\r\n`;
+    }
+    rawReq += '\r\n';
+    upstream.write(rawReq);
+    if (head && head.length) upstream.write(head);
+    clientSocket.pipe(upstream).pipe(clientSocket);
+  });
+
+  upstream.on('error', () => clientSocket.destroy());
+  clientSocket.on('error', () => upstream.destroy());
 });
 
 server.listen(PORT, '0.0.0.0', () => {

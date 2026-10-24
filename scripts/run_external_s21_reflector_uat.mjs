@@ -111,10 +111,33 @@ async function waitForUatIdle(page, timeoutMs = 15000) {
   await sleep(200);
 }
 
+let cachedGcpIdentityToken = null;
+function getGcpIdentityToken() {
+  if (cachedGcpIdentityToken) return cachedGcpIdentityToken;
+  if (process.env.GCP_IDENTITY_TOKEN) {
+    cachedGcpIdentityToken = process.env.GCP_IDENTITY_TOKEN.trim();
+    return cachedGcpIdentityToken;
+  }
+  const gcloudPath =
+    process.env.GCLOUD_BIN ||
+    `${process.env.LOCALAPPDATA}\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd`;
+  try {
+    cachedGcpIdentityToken = execSync(`"${gcloudPath}" auth print-identity-token`, { encoding: 'utf8' }).trim();
+    return cachedGcpIdentityToken;
+  } catch {
+    return '';
+  }
+}
+
 async function callExternalReflector(payload) {
+  const headers = { 'Content-Type': 'application/json' };
+  if (REFLECTOR_URL.includes('.run.app')) {
+    const idTok = getGcpIdentityToken();
+    if (idTok) headers.Authorization = `Bearer ${idTok}`;
+  }
   const res = await fetch(REFLECTOR_URL, {
     method: 'POST',
-    headers: { 'Content-Type': 'application/json' },
+    headers,
     body: JSON.stringify(payload),
   });
   const data = await res.json();
