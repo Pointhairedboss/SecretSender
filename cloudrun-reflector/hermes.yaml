@@ -1,6 +1,6 @@
 # Hermes Agent Configuration for Google Cloud Run Multi-Agent Reflector (uat-agent-reflector)
 # Installed at /app/hermes.yaml and /root/.hermes/config.yaml inside the container.
-# Project: gen-lang-client-0057994039 (australia-southeast1 / global Vertex AI)
+# Project: Resolved dynamically at runtime via GCP Metadata Server / $GCP_PROJECT_ID
 # Schema: Hermes _config_version 50
 
 _config_version: 50
@@ -29,7 +29,7 @@ terminal:
 model:
   default: gemini-3.8-flash
   provider: google-vertex
-  base_url: https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google
+  base_url: https://aiplatform.googleapis.com/v1beta1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google
   openai_base_url: https://generativelanguage.googleapis.com/v1beta/openai
   api_mode: chat_completions
   context_length: 1048576
@@ -38,9 +38,9 @@ model:
 
 providers:
   google-vertex:
-    name: Google Cloud Vertex AI (Global Endpoint - Paid via GCP Credits on gen-lang-client-0057994039)
+    name: Google Cloud Vertex AI (Global Endpoint - Paid via GCP Credits)
     api: http://127.0.0.1:8080/v1
-    vertex_api: https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google
+    vertex_api: https://aiplatform.googleapis.com/v1beta1/projects/${GCP_PROJECT_ID}/locations/global/publishers/google
     api_key: gcp-metadata-oauth
     transport: chat_completions
     default_model: gemini-3.8-flash

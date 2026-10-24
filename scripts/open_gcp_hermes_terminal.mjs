@@ -28,12 +28,37 @@ const SESSIONS_DIR = path.resolve(__dirname, '..', 'logs', 'hermes-sessions');
 const INDEX_FILE = path.join(SESSIONS_DIR, 'cards-index.json');
 fs.mkdirSync(SESSIONS_DIR, { recursive: true });
 
-const CLOUD_RUN_HOST = process.env.CLOUD_RUN_HOST || 'uat-agent-reflector-vwn34fypca-ts.a.run.app';
 const LOCAL_PORT = Number(process.env.LOCAL_PROXY_PORT || 8889);
 const IDLE_TIMEOUT_MS = Number(process.env.IDLE_TIMEOUT_MS || 15 * 60 * 1000);
 const GCLOUD_BIN =
   process.env.GCLOUD_BIN ||
   `${process.env.LOCALAPPDATA}\\Google\\Cloud SDK\\google-cloud-sdk\\bin\\gcloud.cmd`;
+
+function resolveCloudRunHost() {
+  if (process.env.CLOUD_RUN_HOST) return process.env.CLOUD_RUN_HOST;
+  try {
+    const rawUrl = execSync(
+      `"${GCLOUD_BIN}" run services describe uat-agent-reflector --region=australia-southeast1 --format="value(status.url)"`,
+      { encoding: 'utf8', stdio: ['ignore', 'pipe', 'ignore'] }
+    ).trim();
+    if (rawUrl) return new URL(rawUrl).host;
+  } catch {}
+  return '';
+}
+
+function resolveIamPrincipal() {
+  if (process.env.GCP_IAM_PRINCIPAL) return process.env.GCP_IAM_PRINCIPAL;
+  try {
+    return execSync(`"${GCLOUD_BIN}" config get-value account`, {
+      encoding: 'utf8',
+      stdio: ['ignore', 'pipe', 'ignore'],
+    }).trim();
+  } catch {}
+  return 'authenticated-operator';
+}
+
+const CLOUD_RUN_HOST = resolveCloudRunHost();
+const IAM_PRINCIPAL = resolveIamPrincipal();
 
 let cachedToken = '';
 let tokenExpiryMs = 0;
@@ -467,7 +492,7 @@ function renderLaunchpadHtml() {
     <div class="topbar">
       <div class="brand">
         <h1>⚡ BitBop Ephemeral Cloud Agent Launchpad</h1>
-        <p>Persistent Local Session Store (logs/hermes-sessions/) · IAM Locked (gavinrknight@gmail.com) → ${CLOUD_RUN_HOST}</p>
+        <p>Persistent Local Session Store (logs/hermes-sessions/) · IAM Locked (${IAM_PRINCIPAL}) → ${CLOUD_RUN_HOST}</p>
       </div>
       <div class="telemetry-pills">
         <div id="pill-state" class="pill zero">● SLEEPING (0 Active Cloud Sessions · $0.00/hr)</div>
@@ -1094,7 +1119,7 @@ server.listen(LOCAL_PORT, '127.0.0.1', () => {
   console.log(`  BitBop Local Session Launchpad -> https://${CLOUD_RUN_HOST}`);
   console.log(`  Launchpad URL      : ${targetUrl}`);
   console.log(`  Persistent Store   : ${SESSIONS_DIR}`);
-  console.log(`  IAM Principal      : gavinrknight@gmail.com (roles/run.invoker)`);
+  console.log(`  IAM Principal      : ${IAM_PRINCIPAL} (roles/run.invoker)`);
   console.log(`  Idle Protection    : Auto-saves & disconnects idle cards after 15m`);
   console.log(`========================================================================`);
   try {

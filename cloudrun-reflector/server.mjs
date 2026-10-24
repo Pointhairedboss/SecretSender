@@ -39,11 +39,9 @@ function loadHermesConfig() {
     return {
       loaded: false,
       provider: 'gemini',
-      default_model: 'gemini-2.5-flash',
+      default_model: 'gemini-3.8-flash',
       base_url: 'https://generativelanguage.googleapis.com/v1beta',
       openai_base_url: 'https://generativelanguage.googleapis.com/v1beta/openai',
-      vertex_openai_base_url:
-        'https://australia-southeast1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/australia-southeast1/endpoints/openapi',
     };
   }
 
@@ -56,13 +54,11 @@ function loadHermesConfig() {
     loaded: true,
     config_version: Number(getField('_config_version', '50')),
     provider: getField('provider', 'gemini'),
-    default_model: process.env.HERMES_MODEL || getField('default', 'gemini-2.5-flash'),
+    default_model: process.env.HERMES_MODEL || getField('default', 'gemini-3.8-flash'),
     base_url: process.env.GEMINI_BASE_URL || getField('base_url', 'https://generativelanguage.googleapis.com/v1beta'),
     openai_base_url:
       process.env.GEMINI_OPENAI_BASE_URL ||
       getField('openai_base_url', 'https://generativelanguage.googleapis.com/v1beta/openai'),
-    vertex_openai_base_url:
-      'https://australia-southeast1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/australia-southeast1/endpoints/openapi',
     api_key_configured: Boolean(process.env.GOOGLE_API_KEY || process.env.GEMINI_API_KEY),
   };
 }
@@ -101,12 +97,27 @@ async function getExternalTelemetry() {
   };
 }
 
+let cachedGcpProjectId = process.env.GCP_PROJECT_ID || process.env.GOOGLE_CLOUD_PROJECT || '';
+async function resolveGcpProjectId() {
+  if (cachedGcpProjectId) return cachedGcpProjectId;
+  try {
+    const r = await fetch('http://metadata.google.internal/computeMetadata/v1/project/project-id', {
+      headers: { 'Metadata-Flavor': 'Google' },
+      signal: AbortSignal.timeout(2500),
+    });
+    if (r.ok) {
+      cachedGcpProjectId = (await r.text()).trim();
+    }
+  } catch {}
+  return cachedGcpProjectId;
+}
+
 /**
  * Calls the Google Cloud Vertex AI Global endpoint configured in hermes.yaml
- * (https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google/models/{model}:generateContent)
- * using the Cloud Run instance's GCP Metadata Server OAuth token (billed directly to GCP credits on gen-lang-client-0057994039).
+ * using the Cloud Run instance's GCP Metadata Server OAuth token (billed directly to GCP credits).
  */
 async function callHermesGoogleEndpoint(messages, modelOverride = null) {
+  const projectId = await resolveGcpProjectId();
   const getMetadataToken = async () => {
     const metaRes = await fetch(
       'http://metadata.google.internal/computeMetadata/v1/instance/service-accounts/default/token',
@@ -128,7 +139,7 @@ async function callHermesGoogleEndpoint(messages, modelOverride = null) {
 
   const errors = [];
   for (const modelName of vertexModels) {
-    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google/models/${modelName}:generateContent`;
+    const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/global/publishers/google/models/${modelName}:generateContent`;
     try {
       const bearerToken = await getMetadataToken();
       const res = await fetch(endpoint, {
@@ -136,7 +147,7 @@ async function callHermesGoogleEndpoint(messages, modelOverride = null) {
         headers: {
           'Content-Type': 'application/json',
           Authorization: `Bearer ${bearerToken}`,
-          'x-goog-user-project': 'gen-lang-client-0057994039',
+          'x-goog-user-project': projectId,
         },
         body: JSON.stringify({
           systemInstruction: systemMsg ? { parts: [{ text: systemMsg }] } : undefined,
@@ -762,13 +773,14 @@ async function handleVertexOpenAiChatCompletions(req, res) {
     }
   }
 
-  const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/gen-lang-client-0057994039/locations/global/publishers/google/models/${modelName}:generateContent`;
+  const projectId = await resolveGcpProjectId();
+  const endpoint = `https://aiplatform.googleapis.com/v1beta1/projects/${projectId}/locations/global/publishers/google/models/${modelName}:generateContent`;
   const vRes = await fetch(endpoint, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       Authorization: `Bearer ${bearerToken}`,
-      'x-goog-user-project': 'gen-lang-client-0057994039',
+      'x-goog-user-project': projectId,
     },
     body: JSON.stringify(vertexPayload),
   });

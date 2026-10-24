@@ -3,3 +3,4 @@ node_modules/
 *.log
 zero_knowledge_s21_uat_report.json
 .agents/
+logs/hermes-sessions/
