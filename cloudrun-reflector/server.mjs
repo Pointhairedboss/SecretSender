@@ -209,6 +209,97 @@ function sendJson(res, status, payload) {
   res.end(body);
 }
 
+function toBase64Url(buf) {
+  return Buffer.from(buf)
+    .toString('base64')
+    .replace(/\+/g, '-')
+    .replace(/\//g, '_')
+    .replace(/=+$/g, '');
+}
+
+function fromBase64Url(b64u) {
+  const padLen = (4 - (b64u.length % 4)) % 4;
+  const b64 = String(b64u).replace(/-/g, '+').replace(/_/g, '/') + '='.repeat(padLen);
+  return Buffer.from(b64, 'base64');
+}
+
+const REFLECTOR_SYNTHETIC_LINK_KEY_B64U = 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA';
+const REFLECTOR_SYNTHETIC_PLAINTEXT = 'SYNTHETIC-REFLECTOR-PROBE-V2';
+
+function httpBadRequest(message) {
+  const err = new Error(message);
+  err.status = 400;
+  return err;
+}
+
+async function encryptSyntheticEnvelopeV2(
+  plaintext = REFLECTOR_SYNTHETIC_PLAINTEXT,
+  fixedLinkKeyB64u = REFLECTOR_SYNTHETIC_LINK_KEY_B64U,
+) {
+  const linkKeyBytes = fixedLinkKeyB64u ? fromBase64Url(fixedLinkKeyB64u) : crypto.randomBytes(32);
+  const linkKeyB64u = toBase64Url(linkKeyBytes);
+  const saltBytes = crypto.randomBytes(16);
+  const saltB64u = toBase64Url(saltBytes);
+  const nonceBytes = crypto.randomBytes(12);
+  const nonceB64u = toBase64Url(nonceBytes);
+  const shareId = crypto.randomUUID();
+
+  const ikmKey = await crypto.subtle.importKey('raw', linkKeyBytes, 'HKDF', false, ['deriveKey']);
+  const infoBytes = new TextEncoder().encode('secretsender:envelope:v2:aes256gcm');
+  const aesKey = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: saltBytes, info: infoBytes },
+    ikmKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['encrypt'],
+  );
+  const aadBytes = new TextEncoder().encode(`secretsender:envelope:v2:${shareId}:${saltB64u}:${nonceB64u}`);
+  const ctBuf = await crypto.subtle.encrypt(
+    { name: 'AES-GCM', iv: nonceBytes, additionalData: aadBytes },
+    aesKey,
+    new TextEncoder().encode(String(plaintext)),
+  );
+  return {
+    linkKeyB64u,
+    client_envelope: {
+      v: 2,
+      share_id: shareId,
+      alg: 'AES-256-GCM',
+      kdf: 'HKDF-SHA256',
+      salt_b64u: saltB64u,
+      nonce_b64u: nonceB64u,
+      ciphertext_b64u: toBase64Url(new Uint8Array(ctBuf)),
+    },
+  };
+}
+
+async function decryptSyntheticEnvelopeV2(envelopeJsonStr, linkKeyB64u) {
+  const envObj = typeof envelopeJsonStr === 'string' ? JSON.parse(envelopeJsonStr) : envelopeJsonStr;
+  const linkKeyBytes = fromBase64Url(linkKeyB64u);
+  const saltBytes = fromBase64Url(envObj.salt_b64u);
+  const nonceBytes = fromBase64Url(envObj.nonce_b64u);
+  const ctBytes = fromBase64Url(envObj.ciphertext_b64u);
+
+  const ikmKey = await crypto.subtle.importKey('raw', linkKeyBytes, 'HKDF', false, ['deriveKey']);
+  const infoBytes = new TextEncoder().encode('secretsender:envelope:v2:aes256gcm');
+  const aesKey = await crypto.subtle.deriveKey(
+    { name: 'HKDF', hash: 'SHA-256', salt: saltBytes, info: infoBytes },
+    ikmKey,
+    { name: 'AES-GCM', length: 256 },
+    false,
+    ['decrypt'],
+  );
+  const aadBytes = new TextEncoder().encode(
+    `secretsender:envelope:v2:${envObj.share_id}:${envObj.salt_b64u}:${envObj.nonce_b64u}`,
+  );
+  const plainBuf = await crypto.subtle.decrypt(
+    { name: 'AES-GCM', iv: nonceBytes, additionalData: aadBytes },
+    aesKey,
+    ctBytes,
+  );
+  return new TextDecoder().decode(plainBuf);
+}
+
 async function decryptBitBopReveal(revealData, secretKeyBytes, kemInstance) {
   const { cipher, sealed_envelope: sealed } = revealData;
   const kyberCtBytes = Buffer.from(cipher.kyber_ciphertext_hex, 'hex');
@@ -256,7 +347,28 @@ async function waitForUatIdle(page, timeoutMs = 15000) {
   await page.waitForTimeout(200);
 }
 
-async function handleReflect(body) {
+async function handleReflect(body, reqHeaders = {}) {
+  const FORBIDDEN_REFLECT_KEYS = [
+    'password',
+    'secret',
+    'plaintext',
+    'synthetic_secret',
+    'link_key',
+    'link_key_b64u',
+  ];
+  for (const forbiddenKey of FORBIDDEN_REFLECT_KEYS) {
+    if (body[forbiddenKey] !== undefined) {
+      throw httpBadRequest(
+        `Reflector rejects caller-supplied '${forbiddenKey}'; uses fixed internal synthetic payload and link_key only`
+      );
+    }
+  }
+  if (typeof body.claim_url === 'string' && body.claim_url.includes('#')) {
+    throw httpBadRequest(
+      'Reflector rejects claim_url containing # fragment; uses fixed internal synthetic link_key only'
+    );
+  }
+
   const action = body.action || 'ping';
   const telemetry = await getExternalTelemetry();
   const targetOrigin = (body.target_origin || SECRETSENDER_ORIGIN).replace(/\/+$/, '');
@@ -267,22 +379,74 @@ async function handleReflect(body) {
     return { ok: true, action: 'ping', edge_telemetry: telemetry, hermes_config: HERMES_CONFIG };
   }
 
-  // 2. Protocol-level Seal
+  // 2. Protocol-level Seal (Synthetic Client Envelope v2 only)
   if (action === 'seal') {
+    const rawPin =
+      body.pin !== undefined
+        ? body.pin
+        : body.unlockKey !== undefined
+          ? body.unlockKey
+          : body.unlock_key;
+    const pin =
+      rawPin && String(rawPin).trim().length >= 4
+        ? String(rawPin).trim()
+        : crypto.randomBytes(4).toString('hex');
+    const { client_envelope } = await encryptSyntheticEnvelopeV2(
+      REFLECTOR_SYNTHETIC_PLAINTEXT,
+      REFLECTOR_SYNTHETIC_LINK_KEY_B64U,
+    );
+    let bearerAuth = reqHeaders.authorization || (process.env.BITBOP_API_KEY ? `Bearer ${process.env.BITBOP_API_KEY}` : '');
+    if (!bearerAuth) {
+      const fkResp = await fetch(`${targetOrigin}/api/keys/free`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: '{}',
+      });
+      if (fkResp.ok) {
+        const fkData = await fkResp.json();
+        if (fkData.api_key) bearerAuth = `Bearer ${fkData.api_key}`;
+      }
+    }
+    const shareHeaders = { 'Content-Type': 'application/json' };
+    if (bearerAuth) shareHeaders.Authorization = bearerAuth;
     const r = await fetch(`${targetOrigin}/api/share`, {
       method: 'POST',
-      headers: { 'Content-Type': 'application/json' },
-      body: JSON.stringify(body),
+      headers: shareHeaders,
+      body: JSON.stringify({
+        client_envelope,
+        unlockKey: pin,
+        unlockAfterSeconds: body.unlockAfterSeconds,
+        ttlSeconds: body.ttlSeconds,
+        is_sample: false,
+      }),
     });
     const share = await r.json();
+    if (r.ok && share.base_claim_url) {
+      share.pin = pin;
+      share.unlock_key = pin;
+      share.claim_url = share.base_claim_url;
+    }
     return { ok: r.ok, action: 'seal', edge_telemetry: telemetry, share };
   }
 
   // 3. Protocol-level Claim
   if (action === 'claim') {
-    const { escrow_id: escrowId, unlock_key: unlockKey, test_wrong_pin: testWrongPin = true } = body;
+    let escrowId = body.escrow_id;
+    if (!escrowId && typeof body.claim_url === 'string') {
+      try {
+        escrowId = new URL(body.claim_url).searchParams.get('escrow_id') || '';
+      } catch {
+        throw httpBadRequest('Invalid claim_url in reflect claim');
+      }
+    }
+    const unlockKey =
+      body.pin !== undefined
+        ? body.pin
+        : body.unlock_key !== undefined
+          ? body.unlock_key
+          : body.unlockKey;
     if (!escrowId || !unlockKey) {
-      throw new Error('escrow_id and unlock_key are required');
+      throw httpBadRequest('escrow_id and pin (or unlock_key) are required');
     }
 
     const kem = new MlKem768();
@@ -290,20 +454,51 @@ async function handleReflect(body) {
     const pkHex = Buffer.from(publicKey).toString('hex');
     const steps = [];
 
-    let wrongPinStatus = null;
-    if (testWrongPin) {
-      const wr = await fetch(`${apiBase}/escrow/reveal`, {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          escrow_id: escrowId,
-          unlock_key: `${unlockKey}-wrong`,
-          kyber_public_key: pkHex,
-          signature_scheme: 'ml-dsa-44',
-        }),
-      });
-      wrongPinStatus = wr.status;
-      steps.push({ step: 'wrong_pin_probe', status: wr.status, passed: wr.status === 403 });
+    const sr = await fetch(`${apiBase}/escrow/status?escrow_id=${encodeURIComponent(escrowId)}`);
+    const sd = await sr.json().catch(() => ({}));
+    const statusState = sd?.status || sd?.state || 'available';
+    const statusPassed =
+      sr.status === 200 &&
+      (statusState === 'available' || statusState === 'ready') &&
+      sd?.burned !== true &&
+      sd?.escrow_profile === 'secretsender-v2' &&
+      sd?.requires_unlock_key === true;
+    steps.push({ step: 'status_precheck', status: sr.status, passed: statusPassed });
+    if (!statusPassed) {
+      return {
+        ok: false,
+        action: 'claim',
+        edge_telemetry: telemetry,
+        escrow_id: escrowId,
+        steps,
+        error: 'Escrow status precheck failed before reveal',
+      };
+    }
+
+    const wr = await fetch(`${apiBase}/escrow/reveal`, {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json' },
+      body: JSON.stringify({
+        escrow_id: escrowId,
+        claim_id: crypto.randomUUID(),
+        unlock_key: `${unlockKey}-wrong`,
+        kyber_public_key: pkHex,
+        signature_scheme: 'ml-dsa-44',
+      }),
+    });
+    const wrongPinStatus = wr.status;
+    const wrongPinPassed = wr.status === 403;
+    steps.push({ step: 'wrong_pin_probe', status: wr.status, passed: wrongPinPassed });
+    if (!wrongPinPassed) {
+      return {
+        ok: false,
+        action: 'claim',
+        edge_telemetry: telemetry,
+        escrow_id: escrowId,
+        wrong_pin_status: wrongPinStatus,
+        steps,
+        error: `Mandatory wrong-PIN probe expected HTTP 403, got ${wr.status}`,
+      };
     }
 
     const rr = await fetch(`${apiBase}/escrow/reveal`, {
@@ -311,6 +506,7 @@ async function handleReflect(body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         escrow_id: escrowId,
+        claim_id: crypto.randomUUID(),
         unlock_key: String(unlockKey),
         kyber_public_key: pkHex,
         signature_scheme: 'ml-dsa-44',
@@ -322,13 +518,19 @@ async function handleReflect(body) {
         ok: false,
         action: 'claim',
         edge_telemetry: telemetry,
+        steps,
         reveal_status: rr.status,
         error: revealData.error || `HTTP ${rr.status}`,
       };
     }
 
-    const decryptedPlaintext = await decryptBitBopReveal(revealData, secretKey, kem);
-    steps.push({ step: 'mlkem768_aes256gcm_decrypt', status: 200, passed: Boolean(decryptedPlaintext) });
+    const outerPlaintext = await decryptBitBopReveal(revealData, secretKey, kem);
+    const decryptedPlaintext = await decryptSyntheticEnvelopeV2(
+      outerPlaintext,
+      REFLECTOR_SYNTHETIC_LINK_KEY_B64U,
+    );
+    const decryptPassed = decryptedPlaintext === REFLECTOR_SYNTHETIC_PLAINTEXT;
+    steps.push({ step: 'mlkem768_aes256gcm_decrypt', status: 200, passed: decryptPassed });
 
     const vr = await fetch(`${apiBase}/verify`, {
       method: 'POST',
@@ -336,7 +538,7 @@ async function handleReflect(body) {
       body: JSON.stringify(revealData),
     });
     const vd = await vr.json();
-    const revealVerified = vr.status === 200 && vd.valid !== false;
+    const revealVerified = vr.status === 200 && vd?.valid === true;
     steps.push({ step: 'mldsa44_receipt_verify', status: vr.status, passed: revealVerified });
 
     const br = await fetch(`${apiBase}/escrow/reveal`, {
@@ -344,6 +546,7 @@ async function handleReflect(body) {
       headers: { 'Content-Type': 'application/json' },
       body: JSON.stringify({
         escrow_id: escrowId,
+        claim_id: crypto.randomUUID(),
         unlock_key: String(unlockKey),
         kyber_public_key: pkHex,
         signature_scheme: 'ml-dsa-44',
@@ -351,8 +554,9 @@ async function handleReflect(body) {
     });
     steps.push({ step: 'burn_on_read_409_check', status: br.status, passed: br.status === 409 });
 
+    const allStepsPassed = steps.length > 0 && steps.every((s) => s.passed === true);
     return {
-      ok: true,
+      ok: Boolean(revealVerified && allStepsPassed),
       action: 'claim',
       edge_telemetry: telemetry,
       escrow_id: escrowId,
@@ -374,10 +578,15 @@ async function handleReflect(body) {
       await page.goto(`${targetOrigin}/?uat=1`, { waitUntil: 'domcontentloaded', timeout: 25000 });
       await waitForUatIdle(page);
 
-      await page.fill('#secret', String(body.password || 'GCP-BROWSER-SECRET'));
-      if (body.unlockKey) {
-        await page.fill('#pin', String(body.unlockKey));
+      const hasKey = await page.evaluate(() => Boolean(document.getElementById('api-key-input')?.value));
+      if (!hasKey) {
+        await page.click('#mint-free-key-btn').catch(() => {});
+        await waitForUatIdle(page);
       }
+
+      await page.fill('#secret', REFLECTOR_SYNTHETIC_PLAINTEXT);
+      const pinVal = String(body.pin || body.unlockKey || body.unlock_key || '778899');
+      await page.fill('#pin', pinVal);
       await page.click('#seal-btn');
       await page.waitForFunction(
         () => typeof window.__uatState === 'function' && Boolean(window.__uatState().escrowId),
@@ -388,6 +597,7 @@ async function handleReflect(body) {
 
       const out = await page.evaluate(() => ({
         state: window.__uatState(),
+        claimUrl: (document.getElementById('share-url-box')?.textContent?.trim() || '').split('#')[0],
         uatLog: window.__uatRecorder ? window.__uatRecorder.exportLog() : null,
         resultText: document.getElementById('result')?.innerText || '',
       }));
@@ -397,7 +607,7 @@ async function handleReflect(body) {
         action: 'browser_seal',
         edge_telemetry: telemetry,
         escrow_id: out.state.escrowId,
-        claim_url: `${targetOrigin}/?escrow_id=${encodeURIComponent(out.state.escrowId)}`,
+        claim_url: out.claimUrl || `${targetOrigin}/?escrow_id=${encodeURIComponent(out.state.escrowId)}`,
         uat_log: out.uatLog,
       };
     } finally {
@@ -407,15 +617,22 @@ async function handleReflect(body) {
 
   // 5. Full Headless Chromium Browser Claim (runs real DOM + ML-KEM-768 + WebCrypto in GCP Chromium)
   if (action === 'browser_claim') {
-    const { escrow_id: escrowId, unlock_key: unlockKey } = body;
+    const escrowId = body.escrow_id;
+    const unlockKey = body.pin || body.unlock_key || body.unlockKey;
     if (!escrowId || !unlockKey) {
-      throw new Error('escrow_id and unlock_key are required for browser_claim');
+      throw httpBadRequest('escrow_id and pin (or unlock_key) are required for browser_claim');
+    }
+    let claimTargetUrl = `${targetOrigin}/?escrow_id=${encodeURIComponent(escrowId)}&uat=1#${REFLECTOR_SYNTHETIC_LINK_KEY_B64U}`;
+    if (body.claim_url) {
+      const u = new URL(body.claim_url);
+      u.searchParams.set('uat', '1');
+      claimTargetUrl = `${u.toString()}#${REFLECTOR_SYNTHETIC_LINK_KEY_B64U}`;
     }
     const browser = await launchReflectorBrowser();
     try {
       const context = await browser.newContext({ viewport: body.viewport || { width: 1280, height: 800 } });
       const page = await context.newPage();
-      await page.goto(`${targetOrigin}/?escrow_id=${encodeURIComponent(escrowId)}&uat=1`, {
+      await page.goto(claimTargetUrl, {
         waitUntil: 'domcontentloaded',
         timeout: 25000,
       });
@@ -1180,10 +1397,10 @@ const server = http.createServer(async (req, res) => {
     try {
       const raw = await readBody(req);
       const parsed = raw ? JSON.parse(raw) : {};
-      const result = await handleReflect(parsed);
+      const result = await handleReflect(parsed, req.headers);
       sendJson(res, result.ok === false ? 422 : 200, result);
     } catch (err) {
-      sendJson(res, 500, { ok: false, error: err.message || String(err) });
+      sendJson(res, err.status || 500, { ok: false, error: err.message || String(err) });
     }
     return;
   }

@@ -4,3 +4,428 @@ var BitBopMlKem=(()=>{var ze=Object.create;var E=Object.defineProperty;var Oe=Ob
 mlkem/esm/src/sha3/utils.js:
   (*! noble-hashes - MIT License (c) 2022 Paul Miller (paulmillr.com) *)
 */
+;(function() {
+  const shake128 = BitBopMlKem.shake128;
+  const shake256 = BitBopMlKem.shake256;
+  const N = 256;
+  const Q = 8380417;
+  const ROOT_OF_UNITY = 1753;
+  const F = 8347681;
+  const D = 13;
+  const GAMMA2_1 = Math.floor((Q - 1) / 88) | 0;
+  const K = 4, L = 4, GAMMA1 = 1 << 17, GAMMA2 = GAMMA2_1, TAU = 39, ETA = 2, OMEGA = 80;
+  const BETA = TAU * ETA;
+  const CRH_BYTES = 64, TR_BYTES = 64, C_TILDE_BYTES = 32;
+
+  const mod = (a, modulo = Q) => {
+    const r = a % modulo | 0;
+    return (r >= 0 ? r | 0 : (modulo + r) | 0) | 0;
+  };
+  const smod = (a, modulo = Q) => {
+    const r = mod(a, modulo) | 0;
+    return (r > (modulo >> 1) ? (r - modulo) | 0 : r) | 0;
+  };
+  const getMask = (bits) => (bits === 32 ? 0xffffffff : ~(-1 << bits) >>> 0);
+  const reverseBits = (n, bits) => {
+    let rev = 0;
+    for (let i = 0; i < bits; i++, n >>>= 1) rev = (rev << 1) | (n & 1);
+    return rev >>> 0;
+  };
+  const nttZetas = new Int32Array(N);
+  for (let i = 0; i < N; i++) {
+    const b = reverseBits(i, 8);
+    nttZetas[i] = Number((BigInt(ROOT_OF_UNITY) ** BigInt(b)) % BigInt(Q)) | 0;
+  }
+
+  function nttEncode(values) {
+    for (let i = 0, g = 1; i < 8; i++) {
+      const s = 8 - i;
+      const m = 1 << s;
+      const m2 = m >> 1;
+      for (let k = 0; k < N; k += m) {
+        for (let j = 0, grp = g++; j < m2; j++) {
+          const omega = nttZetas[grp];
+          const i0 = k + j, i1 = k + j + m2;
+          const a = values[i0], b = values[i1];
+          const t = mod((b | 0) * (omega | 0));
+          values[i0] = mod((a | 0) + (t | 0));
+          values[i1] = mod((a | 0) - (t | 0));
+        }
+      }
+    }
+    return values;
+  }
+
+  function nttDecode(values) {
+    for (let i = 0, g = 1; i < 8; i++) {
+      const s = i + 1;
+      const m = 1 << s;
+      const m2 = m >> 1;
+      for (let k = 0; k < N; k += m) {
+        for (let j = 0, grp = g++; j < m2; j++) {
+          const omega = nttZetas[N - grp];
+          const i0 = k + j, i1 = k + j + m2;
+          const a = values[i0], b = values[i1];
+          values[i0] = mod((b | 0) + (a | 0));
+          values[i1] = mod(mod((b | 0) - (a | 0)) * (omega | 0));
+        }
+      }
+    }
+    for (let i = 0; i < N; i++) values[i] = mod(F * values[i]);
+    return values;
+  }
+
+  const bitsCoder = (d, compress, verify) => {
+    const mask = getMask(d);
+    const bytesLen = d * (N / 8);
+    return {
+      bytesLen,
+      encode: (poly) => {
+        const r = new Uint8Array(bytesLen);
+        for (let i = 0, buf = 0, bufLen = 0, pos = 0; i < poly.length; i++) {
+          buf |= (compress(verify(poly[i])) & mask) << bufLen;
+          bufLen += d;
+          for (; bufLen >= 8; bufLen -= 8, buf >>= 8) r[pos++] = buf & getMask(bufLen);
+        }
+        return r;
+      },
+      decode: (bytes) => {
+        const r = new Int32Array(N);
+        for (let i = 0, buf = 0, bufLen = 0, pos = 0; i < bytes.length; i++) {
+          buf |= bytes[i] << bufLen;
+          bufLen += 8;
+          for (; bufLen >= d; bufLen -= d, buf >>= d) r[pos++] = verify(compress(buf & mask));
+        }
+        return r;
+      }
+    };
+  };
+
+  const vecCoder = (c, vecLen) => ({
+    bytesLen: vecLen * c.bytesLen,
+    encode: (u) => {
+      const res = new Uint8Array(vecLen * c.bytesLen);
+      for (let i = 0, pos = 0; i < u.length; i++) {
+        const b = c.encode(u[i]);
+        res.set(b, pos);
+        pos += b.length;
+      }
+      return res;
+    },
+    decode: (a) => {
+      const r = [];
+      for (let i = 0; i < a.length; i += c.bytesLen) r.push(c.decode(a.subarray(i, i + c.bytesLen)));
+      return r;
+    }
+  });
+
+  const splitCoder = (...lengths) => {
+    const getLen = (c) => (typeof c === 'number' ? c : c.bytesLen);
+    const bytesLen = lengths.reduce((sum, a) => sum + getLen(a), 0);
+    return {
+      bytesLen,
+      encode: (bufs) => {
+        const res = new Uint8Array(bytesLen);
+        for (let i = 0, pos = 0; i < lengths.length; i++) {
+          const c = lengths[i];
+          const l = getLen(c);
+          const b = typeof c === 'number' ? bufs[i] : c.encode(bufs[i]);
+          res.set(b, pos);
+          pos += l;
+        }
+        return res;
+      },
+      decode: (buf) => {
+        const res = [];
+        let cur = buf;
+        for (const c of lengths) {
+          const l = getLen(c);
+          const b = cur.subarray(0, l);
+          res.push(typeof c === 'number' ? b : c.decode(b));
+          cur = cur.subarray(l);
+        }
+        return res;
+      }
+    };
+  };
+
+  const id = (n) => n;
+  const T1Coder = bitsCoder(10, id, id);
+  const ZCoder = bitsCoder(18, (i) => smod(GAMMA1 - i), id);
+  const W1Coder = bitsCoder(6, id, id);
+  const W1Vec = vecCoder(W1Coder, K);
+  const hintCoder = {
+    bytesLen: OMEGA + K,
+    encode: (h) => {
+      const res = new Uint8Array(OMEGA + K);
+      for (let i = 0, k = 0; i < K; i++) {
+        for (let j = 0; j < N; j++) if (h[i][j] !== 0) res[k++] = j;
+        res[OMEGA + i] = k;
+      }
+      return res;
+    },
+    decode: (buf) => {
+      const h = [];
+      let k = 0;
+      for (let i = 0; i < K; i++) {
+        const hi = new Int32Array(N);
+        if (buf[OMEGA + i] < k || buf[OMEGA + i] > OMEGA) return false;
+        for (let j = k; j < buf[OMEGA + i]; j++) {
+          if (j > k && buf[j] <= buf[j - 1]) return false;
+          hi[buf[j]] = 1;
+        }
+        k = buf[OMEGA + i];
+        h.push(hi);
+      }
+      for (let j = k; j < OMEGA; j++) if (buf[j] !== 0) return false;
+      return h;
+    }
+  };
+
+  const publicCoder = splitCoder(32, vecCoder(T1Coder, K));
+  const sigCoder = splitCoder(C_TILDE_BYTES, vecCoder(ZCoder, L), hintCoder);
+
+  const createXofShake = (shake) => (seed, blockLen) => {
+    if (!blockLen) blockLen = shake.blockLen;
+    const _seed = new Uint8Array(seed.length + 2);
+    _seed.set(seed);
+    const seedLen = seed.length;
+    const buf = new Uint8Array(blockLen);
+    let h = shake.create({});
+    return {
+      get: (x, y) => {
+        _seed[seedLen] = x;
+        _seed[seedLen + 1] = y;
+        h.destroy();
+        h = shake.create({}).update(_seed);
+        return () => h.xofInto(buf);
+      },
+      clean: () => h.destroy()
+    };
+  };
+  const XOF128 = createXofShake(shake128);
+
+  function RejNTTPoly(xof) {
+    const r = new Int32Array(N);
+    for (let j = 0; j < N;) {
+      const b = xof();
+      for (let i = 0; j < N && i <= b.length - 3; i += 3) {
+        const t = (b[i] | (b[i + 1] << 8) | (b[i + 2] << 16)) & 0x7fffff;
+        if (t < Q) r[j++] = t;
+      }
+    }
+    return r;
+  }
+
+  function SampleInBall(seed) {
+    const pre = new Int32Array(N);
+    const s = shake256.create({}).update(seed);
+    const buf = new Uint8Array(shake256.blockLen);
+    s.xofInto(buf);
+    const masks = buf.slice(0, 8);
+    for (let i = N - TAU, pos = 8, maskPos = 0, maskBit = 0; i < N; i++) {
+      let b = i + 1;
+      for (; b > i;) {
+        b = buf[pos++];
+        if (pos < shake256.blockLen) continue;
+        s.xofInto(buf);
+        pos = 0;
+      }
+      pre[i] = pre[b];
+      pre[b] = 1 - (((masks[maskPos] >> maskBit++) & 1) << 1);
+      if (maskBit >= 8) {
+        maskPos++;
+        maskBit = 0;
+      }
+    }
+    return pre;
+  }
+
+  const decompose = (r) => {
+    const rPlus = mod(r);
+    const r0 = smod(rPlus, 2 * GAMMA2) | 0;
+    if (rPlus - r0 === Q - 1) return { r1: 0 | 0, r0: (r0 - 1) | 0 };
+    const r1 = Math.floor((rPlus - r0) / (2 * GAMMA2)) | 0;
+    return { r1, r0 };
+  };
+
+  const UseHint = (h, r) => {
+    const m = Math.floor((Q - 1) / (2 * GAMMA2));
+    const { r1, r0 } = decompose(r);
+    if (h === 1) return r0 > 0 ? mod(r1 + 1, m) | 0 : mod(r1 - 1, m) | 0;
+    return r1 | 0;
+  };
+
+  const polyChknorm = (p, B) => {
+    for (let i = 0; i < N; i++) if (Math.abs(smod(p[i])) >= B) return true;
+    return false;
+  };
+
+  const MultiplyNTTs = (a, b) => {
+    const c = new Int32Array(N);
+    for (let i = 0; i < N; i++) c[i] = mod(a[i] * b[i]);
+    return c;
+  };
+
+  const polyAdd = (a, b) => {
+    for (let i = 0; i < N; i++) a[i] = mod(a[i] + b[i]);
+    return a;
+  };
+  const polySub = (a, b) => {
+    for (let i = 0; i < N; i++) a[i] = mod(a[i] - b[i]);
+    return a;
+  };
+
+  function verifyMlDsa44(sig, msg, publicKey, opts) {
+    try {
+      const ctx = (opts && opts.context) ? opts.context : new Uint8Array(0);
+      if (ctx.length > 255) return false;
+      const M = new Uint8Array(2 + ctx.length + msg.length);
+      M[0] = 0;
+      M[1] = ctx.length;
+      M.set(ctx, 2);
+      M.set(msg, 2 + ctx.length);
+
+      if (!(publicKey instanceof Uint8Array) || publicKey.length !== publicCoder.bytesLen) return false;
+      if (!(sig instanceof Uint8Array) || sig.length !== sigCoder.bytesLen) return false;
+
+      const [rho, t1] = publicCoder.decode(publicKey);
+      const tr = shake256(publicKey, { dkLen: TR_BYTES });
+      const [cTilde, z, h] = sigCoder.decode(sig);
+      if (h === false) return false;
+      for (let i = 0; i < L; i++) if (polyChknorm(z[i], GAMMA1 - BETA)) return false;
+
+      const mu = shake256.create({ dkLen: CRH_BYTES }).update(tr).update(M).digest();
+      const c = nttEncode(SampleInBall(cTilde));
+      const zNtt = z.map((p) => nttEncode(p.slice()));
+      const wTick1 = [];
+      const xof = XOF128(rho);
+      for (let i = 0; i < K; i++) {
+        const t1Shift = t1[i].slice();
+        for (let n = 0; n < N; n++) t1Shift[n] <<= D;
+        const ct12d = MultiplyNTTs(nttEncode(t1Shift), c);
+        const Az = new Int32Array(N);
+        for (let j = 0; j < L; j++) {
+          const aij = RejNTTPoly(xof.get(j, i));
+          polyAdd(Az, MultiplyNTTs(aij, zNtt[j]));
+        }
+        const wApprox = nttDecode(polySub(Az, ct12d));
+        for (let n = 0; n < N; n++) wApprox[n] = UseHint(h[i][n], wApprox[n]);
+        wTick1.push(wApprox);
+      }
+      xof.clean();
+      const c2 = shake256.create({ dkLen: C_TILDE_BYTES }).update(mu).update(W1Vec.encode(wTick1)).digest();
+      for (const t of h) {
+        let sum = 0;
+        for (let n = 0; n < t.length; n++) sum += t[n];
+        if (sum > OMEGA) return false;
+      }
+      for (const t of z) if (polyChknorm(t, GAMMA1 - BETA)) return false;
+      if (cTilde.length !== c2.length) return false;
+      let diff = 0;
+      for (let i = 0; i < cTilde.length; i++) diff |= cTilde[i] ^ c2[i];
+      return diff === 0;
+    } catch (_) {
+      return false;
+    }
+  }
+
+  const SERVICE_PUBLIC_KEY_MLDSA44_B64 = 'b/PZgJYkdUHwJR0atxQ3Y5T7+rDwduRkNvjWG+rforWt7ZXCneaBl8PMboHL4RXhuRseHUPyK2ojx1ICxsv9e/qTAmDmrgh3r14dEiNURvOwOmnMJ15xfrF1757kCB1yTSFzqFMnWVoIQaiiZ+LgtObgiih2RffwsWgLGGI1RRakvmwPv3WzBjl6pP59JWOlI4HxSxPLhCtrEbhYgjrafPPNHr+BlpjlHa6V0/FXO8O+vsMcQ4bfg8WD4JqLYg6dn8XZnXWCOZwk0MQqd7lZvMJVx6yUdJHbNbekNr2MOahGi5Zi1ooI1HWXX5BBA9LNSC8MLGuPpHlXkJFkm/TLwOtDgUGNBBaPEH6n1xUQ/jhjSqQM39Rh8EuLdRq8Z1SxpRuizgpkvG3DACGZDU3N19Id0O2wS6S506jaHZmGT7IINx2eNm2SGmCp+25XqZ9CX4yk9oHUO/N11J99qYMSlPfjsGZGOmlDXYfwxG2n9FQtQ7FOdtd1pXNUnQkU2NrgRZZYBjRdkwBIWzmY+Tv+oavixSrncN5e6QZOfK+Bth2eAHoKeS8kzQY3ewmW+j4Nsv6Yc97qCCabSqQicGBE9DJl9Chcg0iIoAp4j2KRMqCiTPLUnufcsW28lG3evjDp8ytAKDyOCK5hEg0vPOAEvdCRclPJqmygMLZZYyHJvuNiE5NO16rkbQSICD1Y3ttYro489o2eHTUvX1ecIIxy5Cc0oAnFKl1X/BGZpzp6rifA0zigdV/ZJdpY/xg/N3EykSnrGf6NuLGP/4fvTLregoiKPmcgiS/whBmn3YjxcLsJPUs9xwups31paQdwpl+mOtP4czSuvce9nu4vOqhjZxu9ik9ILTX9Ef2qqW/PDkMjT3jFqRvmm+XHhzYOneaWzeDqSmCsoG17qFyCxAjddjHWc+juy9R/5R7YQ8z0i6Z5BbTiP3BgYZzaEDTD3K6rN9xBMAwSotciQ6a/dvFbUIPcqX6jub8prUoe17wVdAfJ/h8xkdOhwwKvqcyMJ8cOMH4NUOBjZXeb5hHAx0i5We1T/qyrPzipz4qr//mTWaHjcUPTUfHqecm/PNUchIAG6LmOVgYU8HvkH/RvbPZVIEOXWtwHyAV1kAt2XJ6ne6acfXaVrmaeLr+wTxwkKml6Lj5ouTli9ExryZ9PwECw6cH/QOQEHudJtm+SuKUasLk4acLn3pTyX7vqpjyM0vO4hgnTtv8fxpNZ05G13L/iPYw1Dh/GxOhyOWBQRcMGkSYSEEYtD9rfq9myiXaCucNY9CCwIpPO++FE2auu5IkFZUPmzhebfVf5R8F+EY9AvwApb3+i3HItIcMRJ84wcOsNI8Ge1bKSoNl7VWWQmo8gO5jwd04OFIQvbH2zO1RaGJpLAIOLVAYCfdGTGg/ZrFXpX3k6xk//T+vBJlW4DBvXFpMOpXlOt+ain9fYeyYqnxtC1IzLmkj0E1T3g+xNVo++cOSrsidZagfa5DD1QmrZ+c0I90sFc9z0OCznaI/43ijg9hAdj3TzOpS6SnpsgLU2+BMadsuKO1szaPjDd6edHgdcIuheWBHZ++wfBJGfojoGL+Qbsm3KBTPKxW5VqB/MDKctiS4fQRpjPkUjMorVVVuxAfGHk4F2bV723ou2ek3HDFjQrisjzYjYuoO81sUaWQfpBqC6JkDqYcLg1RATvuA2NoYdukbw88mJQbD9Lq7i732xtyBRk2bgXtz3APnSEYWacZneqxT7/Qr8d9dWyQ==';
+
+  const TRUSTED_RELEASE_KEYS = {
+    'mldsa44-release-2026-01': SERVICE_PUBLIC_KEY_MLDSA44_B64
+  };
+
+  function b64ToBytes(b64) {
+    const bin = typeof atob === 'function' ? atob(String(b64).trim()) : Buffer.from(String(b64).trim(), 'base64').toString('binary');
+    const out = new Uint8Array(bin.length);
+    for (let i = 0; i < bin.length; i++) out[i] = bin.charCodeAt(i);
+    return out;
+  }
+
+  function hexToBytesLocal(hex) {
+    const clean = String(hex).replace(/^mldsa44:/i, '').trim();
+    if (clean.length % 2 !== 0) return new Uint8Array(0);
+    const out = new Uint8Array(clean.length / 2);
+    for (let i = 0; i < out.length; i++) out[i] = parseInt(clean.substr(i * 2, 2), 16);
+    return out;
+  }
+
+  function verifyMlDsa44Signature(payloadStrOrBytes, signatureHex, keyId) {
+    const resolvedKeyId = keyId || 'mldsa44-release-2026-01';
+    const pubB64 = TRUSTED_RELEASE_KEYS[resolvedKeyId];
+    if (!pubB64) return false;
+    const pubBytes = b64ToBytes(pubB64);
+    const sigBytes = hexToBytesLocal(signatureHex);
+    const msgBytes = typeof payloadStrOrBytes === 'string' ? new TextEncoder().encode(payloadStrOrBytes) : payloadStrOrBytes;
+    return verifyMlDsa44(sigBytes, msgBytes, pubBytes);
+  }
+
+  function verifyReceiptSignature(receipt) {
+    if (!receipt || typeof receipt !== 'object') return false;
+    const ev = receipt.evidence_receipt || (receipt.receipt_version === 2 ? receipt : null);
+    if (ev) {
+      if (ev.signature_scheme && ev.signature_scheme !== 'ml-dsa-44') return false;
+      const keyId = ev.key_id || 'mldsa44-release-2026-01';
+      if (!TRUSTED_RELEASE_KEYS[keyId]) return false;
+      const evSig = ev.signature;
+      if (!evSig) return false;
+      const evCopy = Object.assign({}, ev);
+      delete evCopy.signature;
+      if (!verifyMlDsa44Signature(JSON.stringify(evCopy), evSig, keyId)) return false;
+      if (receipt.delivery_version === 2 && receipt.delivery_signature) {
+        if (receipt.delivery_signature_scheme && receipt.delivery_signature_scheme !== 'ml-dsa-44') return false;
+        const delPayload = JSON.stringify({
+          delivery_version: receipt.delivery_version,
+          escrow_id: receipt.escrow_id,
+          escrow_profile: receipt.escrow_profile,
+          claim_id: receipt.claim_id,
+          cipher: receipt.cipher,
+          sealed_envelope: receipt.sealed_envelope,
+          evidence_receipt_signature: ev.signature
+        });
+        if (!verifyMlDsa44Signature(delPayload, receipt.delivery_signature, keyId)) {
+          const delCopy = Object.assign({}, receipt);
+          delete delCopy.delivery_signature;
+          delete delCopy.signature;
+          if (!verifyMlDsa44Signature(JSON.stringify(delCopy), receipt.delivery_signature, keyId)) return false;
+        }
+      }
+      return true;
+    }
+    if (receipt.signature_b64 && typeof receipt.signature_b64 === 'string') {
+      const keyId = receipt.release_key_id || receipt.key_id || 'mldsa44-release-2026-01';
+      const pubB64 = TRUSTED_RELEASE_KEYS[keyId];
+      if (!pubB64) return false;
+      const excluded = new Set(['signature_b64', 'sig_alg', 'signature_scheme', 'sealed_envelope', 'cipher', 'VerifyURL', 'verify_url']);
+      const canonicalObj = {};
+      for (const k of Object.keys(receipt).sort()) {
+        if (!excluded.has(k) && receipt[k] !== undefined) canonicalObj[k] = receipt[k];
+      }
+      const pubBytes = b64ToBytes(pubB64);
+      const sigBytes = b64ToBytes(receipt.signature_b64);
+      const msgBytes = new TextEncoder().encode(JSON.stringify(canonicalObj));
+      return verifyMlDsa44(sigBytes, msgBytes, pubBytes);
+    }
+    const sig = receipt.signature || (receipt.attestation && receipt.attestation.signature);
+    if (!sig) return false;
+    const scheme = receipt.signature_scheme || (receipt.attestation && receipt.attestation.signature_scheme) || 'ml-dsa-44';
+    if (scheme !== 'ml-dsa-44') return false;
+    const keyId = receipt.key_id || 'mldsa44-release-2026-01';
+    if (!TRUSTED_RELEASE_KEYS[keyId]) return false;
+    const copy = Object.assign({}, receipt);
+    delete copy.signature;
+    delete copy.disclosed_entropy_hex;
+    return verifyMlDsa44Signature(JSON.stringify(copy), sig, keyId);
+  }
+
+  BitBopMlKem = Object.assign({}, BitBopMlKem, {
+    ml_dsa44: { verify: verifyMlDsa44 },
+    SERVICE_PUBLIC_KEY_MLDSA44_B64,
+    TRUSTED_RELEASE_KEYS,
+    verifyMlDsa44Signature,
+    verifyReceiptSignature
+  });
+  if (typeof window !== 'undefined') window.BitBopMlKem = BitBopMlKem;
+  if (typeof globalThis !== 'undefined') globalThis.BitBopMlKem = BitBopMlKem;
+})();

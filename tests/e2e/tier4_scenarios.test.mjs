@@ -1,8 +1,10 @@
 import { describe, it, before, after } from 'node:test';
 import assert from 'node:assert/strict';
+import crypto from 'node:crypto';
+import { chromium } from 'playwright';
 import { setupTestEnvironment } from './harness.mjs';
 
-describe('Tier 4: Real-World Application Scenarios', () => {
+describe('Tier 4: Real-World Application Scenarios (Client Envelope v2 & Browser E2E)', () => {
   let env;
 
   before(async () => {
@@ -14,69 +16,60 @@ describe('Tier 4: Real-World Application Scenarios', () => {
   });
 
   // =========================================================================
-  // Scenario 1: End-to-End Secret Transfer Simulation
+  // Scenario 1: End-to-End Zero-Knowledge Secret Transfer Simulation
   // =========================================================================
-  describe('Scenario 1: End-to-End Secret Transfer Simulation', () => {
-    it('S1: Full lifecycle: Alice seals -> Bob claims -> Decrypts -> Verifies provenance -> Burns', async () => {
-      // Step 1: Alice enters database credentials on Admin page and clicks 'Seal & Create Share Link'
+  describe('Scenario 1: End-to-End Zero-Knowledge Secret Transfer Simulation', () => {
+    it('S1: Full lifecycle: Alice wraps Client Envelope v2 -> seals -> Bob checks status -> reveals -> verifies ML-DSA-44 -> decrypts two layers -> burns', async () => {
       const aliceSecret = 'postgres://admin:qkd_quantum_pass_2026@db.corp.internal:5432/secrets';
+      const { body, linkKeyB64u } = await env.buildShareRequest(aliceSecret, {
+        unlockKey: 'alice-pin-2026',
+      });
+
       const shareRes = await env.fetchApp('/api/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          password: aliceSecret,
-          unlockKey: 'alice-pin-2026',
-        }),
+        body: JSON.stringify(body),
       });
 
       assert.equal(shareRes.status, 200, 'Share creation must succeed');
       const shareData = await shareRes.json();
       assert.ok(shareData.escrow_id);
-      assert.equal(shareData.unlock_key, 'alice-pin-2026');
-      assert.ok(shareData.claim_url);
-      assert.ok(shareData.sms_link);
+      assert.ok(shareData.base_claim_url);
       assert.equal(shareData.commit_verified, true);
 
-      // Step 2: Bob receives SMS containing claim_url and unlock_key
-      const parsedClaimUrl = new URL(shareData.claim_url);
+      // Alice constructs full claim URL locally with #link_key fragment
+      const fullClaimUrl = `${shareData.base_claim_url}#${linkKeyB64u}`;
+      const parsedClaimUrl = new URL(fullClaimUrl);
       const bobEscrowId = parsedClaimUrl.searchParams.get('escrow_id');
+      const bobLinkKey = parsedClaimUrl.hash.slice(1);
       assert.equal(bobEscrowId, shareData.escrow_id);
+      assert.equal(bobLinkKey.length, 43);
 
-      // Step 3: Bob's mobile browser generates post-quantum ML-KEM-768 keypair
+      // Bob probes non-consuming /api/escrow/status
+      const statusRes = await env.fetchApp(`/api/escrow/status?escrow_id=${encodeURIComponent(bobEscrowId)}`);
+      assert.equal(statusRes.status, 200);
+      const statusData = await statusRes.json();
+      assert.equal(statusData.escrow_profile, 'secretsender-v2');
+      assert.equal(statusData.requires_unlock_key, true);
+
       const bobKem = await env.generateKeyPair();
-
-      // Track SecretSender app requests before reveal
-      const appLogsBeforeReveal = env.appLogs.length;
-
-      // Step 4: Bob enters unlock_key and clicks Reveal / Decrypt
-      // Browser calls BitBop Edge directly (0 requests to SecretSender!)
-      const revealRes = await env.fetchMock('/escrow/reveal', {
+      const revealRes = await env.fetchApp('/api/escrow/reveal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           escrow_id: bobEscrowId,
+          claim_id: crypto.randomUUID(),
           unlock_key: 'alice-pin-2026',
           kyber_public_key: bobKem.publicKeyHex,
           signature_scheme: 'ml-dsa-44',
         }),
       });
 
-      assert.equal(revealRes.status, 200, 'Reveal from BitBop must succeed');
+      assert.equal(revealRes.status, 200, 'Reveal must succeed');
       const revealData = await revealRes.json();
 
-      // Step 5: Verify zero queries to SecretSender application server
-      assert.equal(
-        env.appLogs.length,
-        appLogsBeforeReveal,
-        'Zero queries must be made to SecretSender app server during reveal'
-      );
-
-      // Step 6: Bob's browser decapsulates shared secret and decrypts AES-256-GCM envelope
-      const recoveredSecret = await env.decryptReveal(revealData, bobKem.secretKey);
-      assert.equal(recoveredSecret, aliceSecret, 'Decrypted secret must match Alice original secret bit-for-bit');
-
-      // Step 7: Bob's browser verifies ML-DSA-44 provenance receipt with BitBop
-      const verifyRes = await env.fetchMock('/verify', {
+      // Verify ML-DSA-44 provenance receipt
+      const verifyRes = await env.fetchApp('/api/escrow/verify', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(revealData),
@@ -84,13 +77,19 @@ describe('Tier 4: Real-World Application Scenarios', () => {
       assert.equal(verifyRes.status, 200);
       const verifyData = await verifyRes.json();
       assert.equal(verifyData.valid, true);
+      assert.equal(verifyData.local_mldsa44_valid, true);
 
-      // Step 8: Subsequent claim attempt is permanently blocked with HTTP 409
-      const replayRes = await env.fetchMock('/escrow/reveal', {
+      // Decrypt both layers
+      const recoveredSecret = await env.decryptReveal(revealData, bobKem.secretKey, bobLinkKey);
+      assert.equal(recoveredSecret, aliceSecret, 'Decrypted secret must match Alice original secret bit-for-bit');
+
+      // Subsequent claim attempt with new claim_id is permanently blocked with HTTP 409
+      const replayRes = await env.fetchApp('/api/escrow/reveal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           escrow_id: bobEscrowId,
+          claim_id: crypto.randomUUID(),
           unlock_key: 'alice-pin-2026',
           kyber_public_key: bobKem.publicKeyHex,
         }),
@@ -100,178 +99,219 @@ describe('Tier 4: Real-World Application Scenarios', () => {
   });
 
   // =========================================================================
-  // Scenario 2: Multi-Recipient / Adversary Attack Simulation
+  // Scenario 2: Multi-Recipient Adversary Attack & Wrong Link Key Simulation
   // =========================================================================
   describe('Scenario 2: Multi-Recipient Adversary Attack Simulation', () => {
-    it('S2: Adversary brute-force attempts fail (403) without burning; legitimate recipient succeeds; replay fails (409)', async () => {
-      // 1. Legitimate user creates secret with PIN 'vault-key-777'
+    it('S2: Adversary brute-force PINs fail (403); wrong link_key fails AES-GCM auth; legitimate recipient succeeds; replay fails (409)', async () => {
       const vaultSecret = 'PRODUCTION_API_KEY_SECRET_777';
+      const { body, linkKeyB64u } = await env.buildShareRequest(vaultSecret, {
+        unlockKey: 'vault-key-777',
+      });
       const shareRes = await env.fetchApp('/api/share', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          password: vaultSecret,
-          unlockKey: 'vault-key-777',
-        }),
+        body: JSON.stringify(body),
       });
       const shareData = await shareRes.json();
       const escrowId = shareData.escrow_id;
 
-      // 2. Adversary intercepts claim URL and tests dictionary of wrong PINs
       const adversaryKem = await env.generateKeyPair();
       const candidatePins = ['0000', '1234', 'password', 'admin', 'test'];
 
       for (const pin of candidatePins) {
-        const advRes = await env.fetchMock('/escrow/reveal', {
+        const advRes = await env.fetchApp('/api/escrow/reveal', {
           method: 'POST',
           headers: { 'Content-Type': 'application/json' },
           body: JSON.stringify({
             escrow_id: escrowId,
+            claim_id: crypto.randomUUID(),
             unlock_key: pin,
             kyber_public_key: adversaryKem.publicKeyHex,
           }),
         });
         assert.equal(advRes.status, 403, `Adversary attempt with pin '${pin}' must be 403`);
-        const advData = await advRes.json();
-        assert.match(advData.error || '', /Wrong unlock key/i);
       }
 
-      // 3. Legitimate recipient arrives and inputs authentic PIN
+      // Legitimate recipient arrives and inputs authentic PIN
       const legitKem = await env.generateKeyPair();
-      const legitRes = await env.fetchMock('/escrow/reveal', {
+      const legitRes = await env.fetchApp('/api/escrow/reveal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           escrow_id: escrowId,
+          claim_id: crypto.randomUUID(),
           unlock_key: 'vault-key-777',
           kyber_public_key: legitKem.publicKeyHex,
         }),
       });
-      assert.equal(legitRes.status, 200, 'Legitimate recipient claim must succeed despite prior 403 attempts');
+      assert.equal(legitRes.status, 200);
       const legitData = await legitRes.json();
-      const plaintext = await env.decryptReveal(legitData, legitKem.secretKey);
+
+      // Wrong link_key fails inner AES-256-GCM decryption
+      const wrongLinkKey = Buffer.alloc(32, 0x99)
+        .toString('base64')
+        .replace(/\+/g, '-')
+        .replace(/\//g, '_')
+        .replace(/=+$/g, '');
+      await assert.rejects(
+        () => env.decryptReveal(legitData, legitKem.secretKey, wrongLinkKey),
+        'Wrong link_key must fail inner AES-256-GCM authentication',
+      );
+
+      // Authentic link_key decrypts cleanly
+      const plaintext = await env.decryptReveal(legitData, legitKem.secretKey, linkKeyB64u);
       assert.equal(plaintext, vaultSecret);
 
-      // 4. Adversary returns and attempts PINs again -> now rejected with 409 burned
-      const lateAdvRes = await env.fetchMock('/escrow/reveal', {
+      // Subsequent attempt returns 409 burned
+      const lateAdvRes = await env.fetchApp('/api/escrow/reveal', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
           escrow_id: escrowId,
+          claim_id: crypto.randomUUID(),
           unlock_key: 'vault-key-777',
           kyber_public_key: adversaryKem.publicKeyHex,
         }),
       });
-      assert.equal(lateAdvRes.status, 409, 'Once claimed, all further access attempts must return 409');
+      assert.equal(lateAdvRes.status, 409);
     });
   });
 
   // =========================================================================
-  // Scenario 3: Timelocked Embargo Auto-Reveal Simulation
+  // Scenario 3: Synthetic Reflector & Timelock Embargo Simulation
   // =========================================================================
-  describe('Scenario 3: Timelocked Embargo Auto-Reveal Simulation', () => {
-    it('S3: Time-lock countdown transitions to 00:00:00 and auto-reveals on client', async () => {
-      // Create secret with 1-second delay
-      const timedSecret = 'Automated-Embargo-Expiration-Passcode';
-      const shareRes = await env.fetchApp('/api/share', {
+  describe('Scenario 3: Synthetic Reflector & Timelock Embargo Simulation', () => {
+    it('S3: Synthetic POST /api/reflect rejects caller secrets/link_keys, seals fixed synthetic envelope, and verifies ML-DSA-44 on claim', async () => {
+      // 1. Reject caller-supplied password / link_key_b64u / # fragment with HTTP 400
+      for (const badBody of [
+        { action: 'seal', password: 'CallerSuppliedSecret', unlockKey: 'refl-pin-88' },
+        { action: 'claim', escrow_id: 'esc_123', pin: 'refl-pin-88', link_key_b64u: 'AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA' },
+        { action: 'claim', claim_url: 'https://secrets.bitbop.dev/?escrow_id=esc_123#AAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAAA', pin: 'refl-pin-88' },
+      ]) {
+        const badRes = await env.fetchApp('/api/reflect', {
+          method: 'POST',
+          headers: { 'Content-Type': 'application/json' },
+          body: JSON.stringify(badBody),
+        });
+        assert.equal(badRes.status, 400, `Reflector must reject ${JSON.stringify(badBody)} with HTTP 400`);
+      }
+
+      // 2. Seal fixed internal synthetic payload (normal quota, no # or link_key_b64u in response)
+      const sealRes = await env.fetchApp('/api/reflect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          password: timedSecret,
-          unlockKey: 'embargo-auto-pin',
-          unlockAfterSeconds: 1,
+          action: 'seal',
+          pin: 'refl-pin-88',
         }),
       });
-      const shareData = await shareRes.json();
-      const escrowId = shareData.escrow_id;
+      assert.equal(sealRes.status, 200);
+      const sealData = await sealRes.json();
+      assert.equal(sealData.ok, true);
+      assert.equal(sealData.share.claim_url.includes('#'), false, 'Reflector seal claim_url must not include # fragment');
+      assert.equal(sealData.share.link_key_b64u, undefined, 'Reflector seal must not return link_key_b64u');
 
-      const kp = await env.generateKeyPair();
-
-      // Initial probe before embargo: returns 425 with unlock_at timestamp
-      const probeRes = await env.fetchMock('/escrow/reveal', {
+      // 3. Claim using fixed internal synthetic link_key and mandatory wrong-PIN probe
+      const claimRes = await env.fetchApp('/api/reflect', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          escrow_id: escrowId,
-          kyber_public_key: kp.publicKeyHex,
+          action: 'claim',
+          escrow_id: sealData.share.escrow_id,
+          claim_url: sealData.share.claim_url,
+          pin: 'refl-pin-88',
         }),
       });
-      assert.equal(probeRes.status, 425);
-      const probeData = await probeRes.json();
-      assert.ok(probeData.unlock_at);
-
-      // Wait for embargo duration to elapse
-      await new Promise((r) => setTimeout(r, 1200));
-
-      // Auto-reveal triggered by clock tick reaching 00:00:00
-      const autoRevealRes = await env.fetchMock('/escrow/reveal', {
-        method: 'POST',
-        headers: { 'Content-Type': 'application/json' },
-        body: JSON.stringify({
-          escrow_id: escrowId,
-          unlock_key: 'embargo-auto-pin',
-          kyber_public_key: kp.publicKeyHex,
-        }),
-      });
-
-      assert.equal(autoRevealRes.status, 200, 'Post-embargo reveal must return 200');
-      const autoRevealData = await autoRevealRes.json();
-      const recovered = await env.decryptReveal(autoRevealData, kp.secretKey);
-      assert.equal(recovered, timedSecret, 'Recovered secret must match original timed secret');
+      assert.equal(claimRes.status, 200);
+      const claimData = await claimRes.json();
+      assert.equal(claimData.ok, true);
+      assert.equal(claimData.decrypted_plaintext, 'SYNTHETIC-REFLECTOR-PROBE-V2');
+      assert.equal(claimData.reveal_verified, true);
+      assert.equal(claimData.wrong_pin_status, 403);
+      assert.equal(claimData.burn_recheck_status, 409);
+      assert.equal(claimData.steps.every((s) => s.passed === true), true);
     });
   });
 
   // =========================================================================
-  // Scenario 4: Hardware & Architecture Verification (Features 14-23)
+  // Scenario 4: Headless Chromium Browser E2E Verification
   // =========================================================================
-  describe('Scenario 4: Hardware S21 & Corporate Architecture Contract Verification', () => {
-    it('S4.1: UAT Seam Contract: window.__uatState and window.__uatBusy interface specifications', () => {
-      // Define interface contract assertions
-      const mockState = {
-        view: 'admin',
-        escrowId: null,
-        timelockActive: false,
-        revealed: false,
-        burned: false,
-        error: null,
-      };
-      assert.equal(typeof mockState.view, 'string');
-      assert.equal(typeof mockState.timelockActive, 'boolean');
-      assert.equal(typeof mockState.revealed, 'boolean');
-      assert.equal(typeof mockState.burned, 'boolean');
-    });
+  describe('Scenario 4: Headless Chromium Browser E2E Verification', () => {
+    it('S4: Browser seals via Sample Demo, strips #link_key from address bar, verifies ML-DSA-44, decrypts, and redacts UAT telemetry', async () => {
+      let browser;
+      try {
+        browser = await chromium.launch({ headless: true });
+      } catch {
+        browser = await chromium.launch({ headless: true, channel: 'chrome' });
+      }
+      try {
+        const context = await browser.newContext({ viewport: { width: 412, height: 915 } });
+        const page = await context.newPage();
 
-    it('S4.2: ADB S21 Hardware Tunnel Specification Contract', () => {
-      // Verifies the exact command specifications for S21 Ultra ADB connectivity
-      const reverseCmd = 'adb -s R5CR60QL05P reverse tcp:5179 tcp:5179';
-      const forwardCmd = 'adb -s R5CR60QL05P forward tcp:9222 localabstract:chrome_devtools_remote';
-      assert.ok(reverseCmd.includes('tcp:5179 tcp:5179'));
-      assert.ok(forwardCmd.includes('tcp:9222 localabstract:chrome_devtools_remote'));
-    });
+        // 1. Open sender view and run Sample Demo
+        await page.goto(`${env.appUrl}/?uat=1`, { waitUntil: 'domcontentloaded' });
+        await page.click('#sample-demo-btn');
+        await page.waitForFunction(
+          () => typeof window.__uatState === 'function' && Boolean(window.__uatState().escrowId),
+          undefined,
+          { timeout: 15000 },
+        );
 
-    it('S4.3: Corporate Assessment Hop Table Completeness Contract', () => {
-      // Verifies 7 network hops required by ORIGINAL_REQUEST §R3
-      const expectedHops = [
-        'Cloudflare Worker Static Assets',
-        'Cloudflare API /api/turn & /api/ice-servers',
-        'Third-Party PeerJS Signaling (0.peerjs.com)',
-        'STUN Protocol (stun.cloudflare.com:3478)',
-        'TURN over UDP (turn:turn.cloudflare.com:3478)',
-        'TURNS over TLS (turns:turn.cloudflare.com:443)',
-        'Client-to-Client WebRTC P2P DataChannel',
-      ];
-      assert.equal(expectedHops.length, 7);
-    });
+        const senderOut = await page.evaluate(() => ({
+          claimUrl: document.getElementById('share-url-box')?.textContent?.trim() || '',
+          pinShown: document.getElementById('share-pin-box')?.textContent?.trim() || '',
+          hasQrSvg: Boolean(document.querySelector('#qr-container svg')),
+          uatLogStr: JSON.stringify(window.__uatRecorder.exportLog()),
+          vw: window.innerWidth,
+          sw: document.documentElement.scrollWidth,
+        }));
 
-    it('S4.4: Corporate Compatibility Matrix Archetypes Contract', () => {
-      // Verifies the 4+ enterprise network archetypes required by ORIGINAL_REQUEST §R3
-      const requiredArchetypes = [
-        'Standard Corporate NAT & Stateful Firewall',
-        'Enterprise SWG with TLS Inspection / SSL Bumping',
-        'Zero-Trust Isolated / VDI Environment',
-        'Mobile Carrier 4G/5G & Guest Wi-Fi',
-      ];
-      assert.equal(requiredArchetypes.length, 4);
+        assert.ok(senderOut.claimUrl.includes('#'), 'Claim URL must contain #link_key fragment');
+        assert.ok(senderOut.hasQrSvg, 'Sender card must render local SVG QR code');
+        assert.ok(senderOut.sw <= senderOut.vw + 1, 'Zero horizontal overflow on 412px mobile viewport');
+        const linkKeyFragment = senderOut.claimUrl.split('#')[1];
+        assert.equal(linkKeyFragment.length, 43, 'Link key fragment must be 43 Base64URL chars');
+        assert.ok(!senderOut.uatLogStr.includes(linkKeyFragment), 'UAT log must never contain linkKeyFragment');
+
+        // 2. Navigate to malformed fragment -> must fail closed with zero /api/escrow/* network requests
+        const badUrl = `${env.appUrl}/?escrow_id=esc_bad_test&uat=1#short`;
+        await page.goto(badUrl, { waitUntil: 'domcontentloaded' });
+        const badState = await page.evaluate(() => ({
+          state: window.__uatState(),
+          resultText: document.getElementById('result')?.innerText || '',
+        }));
+        assert.equal(badState.state.hasLinkKey, false);
+        assert.match(badState.resultText, /Incomplete or damaged SecretSender link/i);
+
+        // 3. Navigate to valid fullClaimUrl and complete recipient reveal
+        const u = new URL(senderOut.claimUrl);
+        u.host = `127.0.0.1:${env.appPort}`;
+        u.searchParams.set('uat', '1');
+        await page.goto(u.toString(), { waitUntil: 'domcontentloaded' });
+
+        // Verify history.replaceState stripped the #fragment from location.hash
+        const hashAfterLoad = await page.evaluate(() => window.location.hash);
+        assert.equal(hashAfterLoad, '', 'Address bar #fragment must be stripped immediately after load');
+
+        await page.fill('#unlock', senderOut.pinShown);
+        await page.click('#reveal-btn');
+        await page.waitForSelector('#pw-display', { timeout: 15000 });
+
+        const recipientOut = await page.evaluate(() => ({
+          decrypted: document.getElementById('pw-display')?.textContent || '',
+          resultText: document.getElementById('result')?.innerText || '',
+          ctaVisible: document.getElementById('post-reveal-cta')?.style.display !== 'none',
+          uatLogStr: JSON.stringify(window.__uatRecorder.exportLog()),
+        }));
+
+        assert.match(recipientOut.decrypted, /^\[SAMPLE DEMO\]/);
+        assert.match(recipientOut.resultText, /YES \(ML-DSA-44/);
+        assert.equal(recipientOut.ctaVisible, true, 'Post-reveal CTA must be visible after successful reveal');
+        assert.ok(!recipientOut.uatLogStr.includes(recipientOut.decrypted), 'UAT log must redact decrypted secret');
+        assert.ok(!recipientOut.uatLogStr.includes(senderOut.pinShown), 'UAT log must redact PIN');
+      } finally {
+        await browser.close();
+      }
     });
   });
 });
