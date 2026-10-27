@@ -108,54 +108,54 @@ describe('Empirical Adversarial Challenge: Milestone 1 (Path-Traversal, HTTP Ver
 
     const traversalVectors = [
       // Standard dot-dot-slash variations
-      { name: 'Standard parent dir traversal (/badges/../server.mjs)', path: '/badges/../server.mjs' },
+      { name: 'Standard parent dir traversal (/badges/../worker/index.mjs)', path: '/badges/../worker/index.mjs' },
       { name: 'Root parent dir traversal (/../package.json)', path: '/../package.json' },
       { name: 'Double parent traversal (/badges/../../package.json)', path: '/badges/../../package.json' },
       { name: 'Bare parent dir (/..)', path: '/..' },
       { name: 'Badges bare parent (/badges/..)', path: '/badges/..' },
-      { name: 'Badges dot slash (/badges/./server.mjs)', path: '/badges/./server.mjs' },
+      { name: 'Badges dot slash (/badges/./worker/index.mjs)', path: '/badges/./worker/index.mjs' },
 
       // URL-encoded dot-dot (%2e%2e)
-      { name: 'URL-encoded %2e%2e/ (/badges/%2e%2e/server.mjs)', path: '/badges/%2e%2e/server.mjs' },
-      { name: 'URL-encoded %2e%2e%2f (/badges/%2e%2e%2fserver.mjs)', path: '/badges/%2e%2e%2fserver.mjs' },
-      { name: 'Uppercase URL-encoded %2E%2E%2F (/badges/%2E%2E%2Fserver.mjs)', path: '/badges/%2E%2E%2Fserver.mjs' },
+      { name: 'URL-encoded %2e%2e/ (/badges/%2e%2e/worker/index.mjs)', path: '/badges/%2e%2e/worker/index.mjs' },
+      { name: 'URL-encoded %2e%2e%2f (/badges/%2e%2e%2fworker/index.mjs)', path: '/badges/%2e%2e%2fworker/index.mjs' },
+      { name: 'Uppercase URL-encoded %2E%2E%2F (/badges/%2E%2E%2Fworker/index.mjs)', path: '/badges/%2E%2E%2Fworker/index.mjs' },
       { name: 'Root URL-encoded %2e%2e%2f (/%2e%2e%2fpackage.json)', path: '/%2e%2e%2fpackage.json' },
-      { name: 'Mixed encoding ..%2f (/badges/..%2fserver.mjs)', path: '/badges/..%2fserver.mjs' },
-      { name: 'Mixed encoding ..%2F (/badges/..%2Fserver.mjs)', path: '/badges/..%2Fserver.mjs' },
+      { name: 'Mixed encoding ..%2f (/badges/..%2fworker/index.mjs)', path: '/badges/..%2fworker/index.mjs' },
+      { name: 'Mixed encoding ..%2F (/badges/..%2Fworker/index.mjs)', path: '/badges/..%2Fworker/index.mjs' },
 
       // Backslash variations (Windows filesystem path delimiter attacks)
-      { name: 'Literal backslash in badges (/badges\\..\\server.mjs)', path: '/badges\\..\\server.mjs' },
-      { name: 'Mixed slash-backslash (/badges/..\\server.mjs)', path: '/badges/..\\server.mjs' },
-      { name: 'Encoded backslash %5c (/badges/..%5cserver.mjs)', path: '/badges/..%5cserver.mjs' },
-      { name: 'Uppercase encoded backslash %5C (/badges/..%5Cserver.mjs)', path: '/badges/..%5Cserver.mjs' },
+      { name: 'Literal backslash in badges (/badges\\..\\worker\\index.mjs)', path: '/badges\\..\\worker\\index.mjs' },
+      { name: 'Mixed slash-backslash (/badges/..\\worker\\index.mjs)', path: '/badges/..\\worker\\index.mjs' },
+      { name: 'Encoded backslash %5c (/badges/..%5cworker%5cindex.mjs)', path: '/badges/..%5cworker%5cindex.mjs' },
+      { name: 'Uppercase encoded backslash %5C (/badges/..%5Cworker%5Cindex.mjs)', path: '/badges/..%5Cworker%5Cindex.mjs' },
       { name: 'Root encoded backslash (/%5cpackage.json)', path: '/%5cpackage.json' },
       { name: 'Encoded backslash with %2e (/%5c%2e%2e%5cpackage.json)', path: '/%5c%2e%2e%5cpackage.json' },
 
       // Null byte injection (%00)
       { name: 'Null byte after valid SVG (/badges/bitbop-favicon.svg%00)', path: '/badges/bitbop-favicon.svg%00' },
       { name: 'Null byte with extension (/badges/bitbop-favicon.svg%00.txt)', path: '/badges/bitbop-favicon.svg%00.txt' },
-      { name: 'Null byte in traversal (/badges/..%00/server.mjs)', path: '/badges/..%00/server.mjs' },
+      { name: 'Null byte in traversal (/badges/..%00/worker/index.mjs)', path: '/badges/..%00/worker/index.mjs' },
       { name: 'Null byte on favicon (/favicon.svg%00)', path: '/favicon.svg%00' },
       { name: 'Bare null byte (/%00)', path: '/%00' },
 
       // Absolute paths & Windows drive letters
       { name: 'Windows drive letter (/C:/Windows/win.ini)', path: '/C:/Windows/win.ini' },
-      { name: 'Windows drive project file (/C:/code/projects/SecretSender/server.mjs)', path: '/C:/code/projects/SecretSender/server.mjs' },
+      { name: 'Windows drive project file (/C:/code/projects/SecretSender/worker/index.mjs)', path: '/C:/code/projects/SecretSender/worker/index.mjs' },
       { name: 'Unix absolute path (/etc/passwd)', path: '/etc/passwd' },
       { name: 'Unix shadow path (/etc/shadow)', path: '/etc/shadow' },
 
       // Windows NTFS Alternate Data Streams (ADS)
       { name: 'NTFS ADS stream on favicon (/favicon.svg::$DATA)', path: '/favicon.svg::$DATA' },
       { name: 'NTFS ADS stream on badge (/badges/bitbop-favicon.svg::$DATA)', path: '/badges/bitbop-favicon.svg::$DATA' },
-      { name: 'NTFS ADS stream on server.mjs (/badges/server.mjs::$DATA)', path: '/badges/server.mjs::$DATA' },
+      { name: 'NTFS ADS stream on worker (/badges/index.mjs::$DATA)', path: '/badges/index.mjs::$DATA' },
 
       // Direct access to project files outside /public
-      { name: 'Direct access to server.mjs (/server.mjs)', path: '/server.mjs' },
+      { name: 'Direct access to worker/index.mjs (/worker/index.mjs)', path: '/worker/index.mjs' },
       { name: 'Direct access to package.json (/package.json)', path: '/package.json' },
       { name: 'Direct access to PROJECT.md (/PROJECT.md)', path: '/PROJECT.md' },
       { name: 'Direct access to README.md (/README.md)', path: '/README.md' },
       { name: 'Nonexistent SVG in badges (/badges/nonexistent_quantum_badge.svg)', path: '/badges/nonexistent_quantum_badge.svg' },
-      { name: 'Non-SVG file in badges (/badges/server.mjs)', path: '/badges/server.mjs' },
+      { name: 'Non-SVG file in badges (/badges/index.mjs)', path: '/badges/index.mjs' },
       { name: 'Badge with directory slash (/badges/bitbop-favicon.svg/)', path: '/badges/bitbop-favicon.svg/' },
       { name: 'Badge with backup extension (/badges/bitbop-favicon.svg.bak)', path: '/badges/bitbop-favicon.svg.bak' },
     ];
@@ -174,21 +174,21 @@ describe('Empirical Adversarial Challenge: Milestone 1 (Path-Traversal, HTTP Ver
     }
 
     // Raw TCP socket tests with unnormalized byte streams
-    it('T1.Raw: Raw TCP socket fuzzing with literal unencoded /badges/../server.mjs', async () => {
+    it('T1.Raw: Raw TCP socket fuzzing with literal unencoded /badges/../worker/index.mjs', async () => {
       const rawRequest =
-        `GET /badges/../server.mjs HTTP/1.1\r\n` +
+        `GET /badges/../worker/index.mjs HTTP/1.1\r\n` +
         `Host: 127.0.0.1:${port}\r\n` +
         `Connection: close\r\n\r\n`;
 
       const rawResponse = await sendRawRequest(port, rawRequest);
       const firstLine = rawResponse.split('\r\n')[0] || '';
       assert.match(firstLine, /HTTP\/1\.[01]\s+(403|404)/, `Raw response line must be 403/404, got: ${firstLine}`);
-      assertZeroLeaks(rawResponse, 'Raw TCP socket /badges/../server.mjs');
+      assertZeroLeaks(rawResponse, 'Raw TCP socket /badges/../worker/index.mjs');
     });
 
-    it('T1.Raw: Raw TCP socket fuzzing with literal backslashes GET \\badges\\..\\server.mjs', async () => {
+    it('T1.Raw: Raw TCP socket fuzzing with literal backslashes GET \\badges\\..\\worker\\index.mjs', async () => {
       const rawRequest =
-        `GET \\badges\\..\\server.mjs HTTP/1.1\r\n` +
+        `GET \\badges\\..\\worker\\index.mjs HTTP/1.1\r\n` +
         `Host: 127.0.0.1:${port}\r\n` +
         `Connection: close\r\n\r\n`;
 
@@ -268,17 +268,17 @@ describe('Empirical Adversarial Challenge: Milestone 1 (Path-Traversal, HTTP Ver
       }
     });
 
-    it('V5: Disallowed verbs on /api/share (GET, PUT, DELETE, TRACE) return HTTP 404 (only POST accepted)', async () => {
+    it('V5: Disallowed verbs on /api/share (GET, PUT, DELETE, TRACE) return HTTP 405 (only POST accepted)', async () => {
       for (const verb of ['GET', 'PUT', 'DELETE', 'TRACE', 'OPTIONS']) {
         const res = await rawHttpRequest(port, verb, '/api/share');
-        assert.equal(res.statusCode, 404, `Expected HTTP 404 for ${verb} /api/share`);
+        assert.equal(res.statusCode, 405, `Expected HTTP 405 for ${verb} /api/share`);
       }
     });
 
-    it('V6: Disallowed verbs on /health (POST, PUT, DELETE) return HTTP 404 (only GET accepted)', async () => {
+    it('V6: Disallowed verbs on /health (POST, PUT, DELETE) return HTTP 405 (only GET/HEAD accepted)', async () => {
       for (const verb of ['POST', 'PUT', 'DELETE']) {
         const res = await rawHttpRequest(port, verb, '/health');
-        assert.equal(res.statusCode, 404, `Expected HTTP 404 for ${verb} /health`);
+        assert.equal(res.statusCode, 405, `Expected HTTP 405 for ${verb} /health`);
       }
     });
   });
@@ -366,8 +366,8 @@ describe('Empirical Adversarial Challenge: Milestone 1 (Path-Traversal, HTTP Ver
       assert.equal(resBadge.headers['content-type'], 'image/svg+xml; charset=utf-8');
     });
 
-    it('S6: Query parameter containing traversal attempt (?foo=../server.mjs) is rejected with 403 Forbidden', async () => {
-      const res = await rawHttpRequest(port, 'GET', '/favicon.svg?foo=../server.mjs');
+    it('S6: Query parameter containing traversal attempt (?foo=../worker/index.mjs) is rejected with 403 Forbidden', async () => {
+      const res = await rawHttpRequest(port, 'GET', '/favicon.svg?foo=../worker/index.mjs');
       assert.equal(res.statusCode, 403, 'Early defense must reject rawUrl containing .. even in query string');
     });
   });
@@ -387,7 +387,11 @@ describe('Empirical Adversarial Challenge: Milestone 1 (Path-Traversal, HTTP Ver
         Host: 'evil-attacker.example.org',
       });
       assert.equal(res.statusCode, 200);
-      assert.deepEqual(JSON.parse(res.bodyText), { status: 'ok', service: 'SecretSender' });
+      assert.deepEqual(JSON.parse(res.bodyText), {
+        status: 'ok',
+        service: 'SecretSender',
+        profile: 'secretsender-v2',
+      });
     });
 
     it('P3: Repeated consecutive requests to cached SVG assets demonstrate cache stability', async () => {

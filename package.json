@@ -3,9 +3,9 @@
   "version": "1.0.0",
   "description": "Quantum-sealed one-time password & secret sharing web application with future reveal embargo, SMS handoff, and post-quantum browser decryption (powered by BitBop).",
   "type": "module",
-  "main": "server.mjs",
+  "main": "worker/index.mjs",
   "scripts": {
-    "start": "node server.mjs",
+    "start": "node scripts/build_cloudflare.mjs && npx wrangler dev --port 5179",
     "build:cf": "node scripts/build_cloudflare.mjs",
     "preview:cf": "node scripts/build_cloudflare.mjs && npx wrangler dev",
     "deploy": "node scripts/build_cloudflare.mjs && npx wrangler deploy",
@@ -17,6 +17,7 @@
     "gcp:terminal": "node scripts/open_gcp_hermes_terminal.mjs"
   },
   "dependencies": {
+    "@noble/post-quantum": "^0.6.1",
     "mlkem": "^2.7.0"
   },
   "engines": {

@@ -1,12 +1,12 @@
-import { spawn } from 'node:child_process';
 import http from 'node:http';
 import fs from 'node:fs';
 import path from 'node:path';
 import { fileURLToPath } from 'node:url';
+import { buildHtml } from '../scripts/client_template.mjs';
+import { setupTestEnvironment } from './e2e/harness.mjs';
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url));
 const ROOT_DIR = path.resolve(__dirname, '..');
-const SERVER_FILE = path.join(ROOT_DIR, 'server.mjs');
 const PUBLIC_DIR = path.join(ROOT_DIR, 'public');
 const BADGES_DIR = path.join(PUBLIC_DIR, 'badges');
 
@@ -68,8 +68,8 @@ async function runAllChecks() {
   console.log('================================================================\n');
 
   // 1. Static Source & DOM Inspection
-  console.log('--- Test Suite 1: BitBop Brand Tokens in server.mjs ---');
-  const serverSource = fs.readFileSync(SERVER_FILE, 'utf8');
+  console.log('--- Test Suite 1: BitBop Brand Tokens in scripts/client_template.mjs ---');
+  const serverSource = buildHtml();
 
   // Exact presence of all 9 BitBop color tokens
   const requiredTokens = [
@@ -177,14 +177,12 @@ async function runAllChecks() {
     assert(serverSource.includes(`data-sec="${preset}"`), `Preset data-sec="${preset}" present in presets bar`);
   }
 
-  // Zero Server Requests Contract
-  console.log('\n--- Test Suite 7: Zero Server Requests Contract During Claim/Reveal ---');
-  // Extract client script from server.mjs
-  const scriptMatch = serverSource.match(/<script>([\s\S]*?)<\/script>/);
-  assert(Boolean(scriptMatch), 'Client-side script extracted from HTML');
-  const clientScript = scriptMatch ? scriptMatch[1] : '';
+  // Zero-Knowledge Client Envelope v2 Contract
+  console.log('\n--- Test Suite 7: Zero-Knowledge Client Envelope v2 Contract During Claim/Reveal ---');
+  const scriptMatches = [...serverSource.matchAll(/<script>([\s\S]*?)<\/script>/g)];
+  assert(scriptMatches.length > 0, 'Client-side script extracted from HTML');
+  const clientScript = scriptMatches.map((m) => m[1]).join('\n');
 
-  // Extract probe and reveal functions
   const probeMatch = clientScript.match(/async function probeEscrowStatusOnLoad[\s\S]*?^  \}/m);
   const revealMatch = clientScript.match(/async function performDirectBrowserReveal[\s\S]*?^  \}/m);
   assert(Boolean(probeMatch), 'probeEscrowStatusOnLoad function found');
@@ -193,19 +191,22 @@ async function runAllChecks() {
   const probeCode = probeMatch ? probeMatch[0] : '';
   const revealCode = revealMatch ? revealMatch[0] : '';
 
-  // Ensure NO fetch calls to relative paths (e.g. fetch('/', fetch('/api/'))
-  const relativeFetchInProbe = probeCode.match(/fetch\s*\(\s*['"`]\/[^'"`]*['"`]/g);
-  const relativeFetchInReveal = revealCode.match(/fetch\s*\(\s*['"`]\/[^'"`]*['"`]/g);
-  assert(!relativeFetchInProbe, 'probeEscrowStatusOnLoad makes ZERO relative requests to SecretSender', JSON.stringify(relativeFetchInProbe));
-  assert(!relativeFetchInReveal, 'performDirectBrowserReveal makes ZERO relative requests to SecretSender', JSON.stringify(relativeFetchInReveal));
-
-  // Ensure calls target BITBOP_API
-  assert(probeCode.includes("fetch(BITBOP_API + '/escrow/reveal'"), 'probeEscrowStatusOnLoad targets BITBOP_API directly');
-  assert(revealCode.includes("fetch(BITBOP_API + '/escrow/reveal'"), 'performDirectBrowserReveal targets BITBOP_API/escrow/reveal directly');
-  assert(revealCode.includes("fetch(BITBOP_API + '/verify'"), 'performDirectBrowserReveal verifies receipt directly against BITBOP_API/verify');
-  assert(clientScript.includes("var BITBOP_API = 'https://api.bitbop.dev'"), 'BITBOP_API points to https://api.bitbop.dev');
-
-  // Verify client-side decapsulation
+  assert(
+    probeCode.includes("fetch('/api/escrow/status?escrow_id='"),
+    'probeEscrowStatusOnLoad queries non-consuming /api/escrow/status endpoint'
+  );
+  assert(
+    revealCode.includes("fetch('/api/escrow/reveal'"),
+    'performDirectBrowserReveal invokes /api/escrow/reveal proxy endpoint'
+  );
+  assert(
+    revealCode.includes("fetch('/api/escrow/verify'"),
+    'performDirectBrowserReveal verifies receipt against /api/escrow/verify'
+  );
+  assert(
+    revealCode.includes('window.BitBopMlKem.verifyReceiptSignature'),
+    'performDirectBrowserReveal verifies receipt locally via pinned ML-DSA-44 public key'
+  );
   assert(
     revealCode.includes('kemInstance.decap') || clientScript.includes('kemInstance.decap'),
     'Client-side decapsulation executes locally via kemInstance.decap()'
@@ -215,41 +216,11 @@ async function runAllChecks() {
     'Client-side envelope decryption executes locally via crypto.subtle.decrypt()'
   );
 
-  // 2. Ephemeral Server Live Verification
-  console.log('\n--- Test Suite 8: Ephemeral Server Live HTTP Verification ---');
-  const TEST_PORT = 5198;
-  const serverProcess = spawn(process.execPath, [SERVER_FILE], {
-    env: { ...process.env, PORT: String(TEST_PORT), HOST: '127.0.0.1' },
-    stdio: ['ignore', 'pipe', 'pipe'],
-  });
-
-  // Wait for server to be ready
-  await new Promise((resolve, reject) => {
-    let output = '';
-    const timeout = setTimeout(() => {
-      serverProcess.kill();
-      reject(new Error('Server start timed out:\n' + output));
-    }, 5000);
-
-    serverProcess.stdout.on('data', (d) => {
-      output += d.toString();
-      if (output.includes(`listening on http://127.0.0.1:${TEST_PORT}`)) {
-        clearTimeout(timeout);
-        resolve();
-      }
-    });
-
-    serverProcess.stderr.on('data', (d) => {
-      output += d.toString();
-    });
-
-    serverProcess.on('exit', (code) => {
-      clearTimeout(timeout);
-      reject(new Error(`Server exited unexpectedly with code ${code}:\n` + output));
-    });
-  });
-
-  const BASE_URL = `http://127.0.0.1:${TEST_PORT}`;
+  // 2. Ephemeral Worker Server Live Verification
+  console.log('\n--- Test Suite 8: Ephemeral Worker Live HTTP Verification ---');
+  const env = await setupTestEnvironment();
+  const TEST_PORT = env.appPort;
+  const BASE_URL = env.appUrl;
 
   try {
     // Test GET /
@@ -324,13 +295,13 @@ async function runAllChecks() {
     // Security & Traversal Hardening Suite
     console.log('\n--- Test Suite 11: Security & Path Traversal Hardening ---');
     const traversalAttacks = [
-      { path: '/badges/../server.mjs', expected: 403, name: 'Parent traversal via /badges/../server.mjs' },
-      { path: '/badges/%2e%2e/server.mjs', expected: 403, name: 'URL-encoded %2e%2e traversal' },
-      { path: '/badges/%2E%2E/server.mjs', expected: 403, name: 'Uppercase URL-encoded %2E%2E traversal' },
-      { path: '/badges/..%2fserver.mjs', expected: 403, name: 'Mixed dot-slash encoded traversal' },
-      { path: '/badges/..\\server.mjs', expected: 403, name: 'Backslash traversal attempt' },
-      { path: '/badges/%5cserver.mjs', expected: 403, name: 'URL-encoded backslash traversal' },
-      { path: '/badges/%5Cserver.mjs', expected: 403, name: 'Uppercase URL-encoded %5C traversal' },
+      { path: '/badges/../worker/index.mjs', expected: 403, name: 'Parent traversal via /badges/../worker/index.mjs' },
+      { path: '/badges/%2e%2e/worker/index.mjs', expected: 403, name: 'URL-encoded %2e%2e traversal' },
+      { path: '/badges/%2E%2E/worker/index.mjs', expected: 403, name: 'Uppercase URL-encoded %2E%2E traversal' },
+      { path: '/badges/..%2fworker/index.mjs', expected: 403, name: 'Mixed dot-slash encoded traversal' },
+      { path: '/badges/..\\worker\\index.mjs', expected: 403, name: 'Backslash traversal attempt' },
+      { path: '/badges/%5cworker%5cindex.mjs', expected: 403, name: 'URL-encoded backslash traversal' },
+      { path: '/badges/%5Cworker%5Cindex.mjs', expected: 403, name: 'Uppercase URL-encoded %5C traversal' },
       { path: '/badges/nonexistent.svg', expected: 404, name: 'Missing SVG badge returns 404' },
       { path: '/badges/malicious.exe', expected: 404, name: 'Non-svg extension returns 404' },
       { path: '/badges/sub/badge.svg', expected: 404, name: 'Subdirectory path returns 404' },
@@ -369,7 +340,7 @@ async function runAllChecks() {
     assert(all200, '100 concurrent requests across all endpoints complete with HTTP 200');
 
   } finally {
-    serverProcess.kill('SIGKILL');
+    await env.cleanup();
   }
 
   // Summary
