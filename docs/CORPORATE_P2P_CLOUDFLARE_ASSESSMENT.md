@@ -1,11 +1,13 @@
-# Corporate Environment Assessment: Cloudflare Edge & WebRTC P2P Deployment Analysis
+# Historical Corporate Environment Assessment: Cloudflare Edge & WebRTC P2P Deployment Analysis
 
-**Document Status:** Published Engineering Assessment  
+**Document Status:** Historical comparative assessment; operational sections updated for v1.1
 **Author:** Worker M4 1 (Corporate P2P Cloudflare Assessment Author)  
 **Target Application:** `SecretSender` (`c:\code\projects\SecretSender`)  
 **Reference Architecture:** `D-D` Cloudflare Edge Worker + Realtime TURN + PeerJS Mesh (`c:\code\projects\D-D`)  
 **Associated Documents:** `PROJECT.md`, `ORIGINAL_REQUEST.md`, `docs/UAT_PLAN.md`  
 **Date:** October 2026  
+
+> **v1.1 status:** This is a historical comparison with a different application's WebRTC architecture. Percentages, cost/availability claims and prior sign-offs below are retained as historical analysis, not independently verified measurements or current release guarantees. Sections 5.1 and 7 now point to the merged implementation. Use [the current README](../README.md), [deployment guide](DEPLOYMENT.md) and [verification status](../TEST_READY.md) for SecretSender operations. Normal browser claims use same-origin Worker routes and a browser-generated fragment key; no generic plaintext reverse-proxy example is a supported integration.
 
 ---
 
@@ -301,76 +303,13 @@ In a pure client-to-client P2P architecture without a centralized authoritative 
 
 The existing `SecretSender` architecture resolves every network, operational, and cryptographic limitation of WebRTC P2P by anchoring secrets in the **BitBop Quantum Hardware Escrow** (`https://api.bitbop.dev`).
 
-### 5.1 End-to-End Cryptographic Protocol Trace
+### 5.1 Current v1.1 protocol and security boundary
 
-```
-+----------------------------------------------------------------------------------------------------+
-|                               SECRETSENDER RECIPIENT REVEAL FLOW                                   |
-+----------------------------------------------------------------------------------------------------+
-|                                                                                                    |
-|  [Recipient Browser]                                                [BitBop Hardware Cluster]      |
-|          |                                                            (api.bitbop.dev)             |
-|          |                                                                   |                     |
-|          | 1. Generates ephemeral ML-KEM-768 keypair in WebCrypto            |                     |
-|          |    (kyber_pk, kyber_sk)                                           |                     |
-|          |                                                                   |                     |
-|          | 2. POST /escrow/reveal -----------------------------------------> |                     |
-|          |    { escrow_id, kyber_public_key, unlock_key }                    |                     |
-|          |                                                                   | 3. Hardware Checks: |
-|          |                                                                   |    - Time-Lock?     |
-|          |                                                                   |      (If early ->   |
-|          |                                                                   |       HTTP 425)     |
-|          |                                                                   |    - PIN Valid?     |
-|          |                                                                   |      (If wrong ->   |
-|          |                                                                   |       HTTP 403)     |
-|          |                                                                   |    - Already Read?  |
-|          |                                                                   |      (If burned ->  |
-|          |                                                                   |       HTTP 409)     |
-|          |                                                                   |                     |
-|          |                                                                   | 4. Unseals Envelope |
-|          |                                                                   |    & Destroys Key   |
-|          |                                                                   |    Encapsulates via |
-|          |                                                                   |    ML-KEM-768       |
-|          |                                                                   |    Signs receipt    |
-|          |                                                                   |    with ML-DSA-44   |
-|          |                                                                   |                     |
-|          | <-----------------------------------------------------------------+                     |
-|          |    HTTP 200 OK                                                                          |
-|          |    { encrypted_secret, kyber_ciphertext, receipt }                                      |
-|          |                                                                                         |
-|          | 5. Browser decapsulates shared secret using kyber_sk                                    |
-|          | 6. Browser decrypts payload using AES-256-GCM via WebCrypto                             |
-|          | 7. POST /verify { receipt } to verify ML-DSA-44 provenance                               |
-|          v                                                                                         |
-|  [Plaintext Secret Displayed]                                                                      |
-|                                                                                                    |
-+----------------------------------------------------------------------------------------------------+
-```
+The sender encrypts the secret in its browser into Client Envelope v2 before `POST /api/share`. The Worker validates the envelope and mandatory PIN, commits the encrypted envelope to BitBop, and verifies the creation response. It returns a fragment-free base URL; the browser appends its 256-bit link key locally.
 
-#### Protocol Stages:
+Recipients use the complete link and PIN, a five-minute tab session, and same-origin `/api/escrow/status`, `/api/escrow/reveal` and `/api/escrow/verify`. Status is non-consuming. The browser verifies signatures, unseals the outer BitBop layer and decrypts the inner envelope with the fragment key. The PIN and encrypted envelope traverse the Worker; the normal plaintext secret and link key do not.
 
-1. **Sealing Phase (Sender):**
-   - Admin enters secret, PIN (`unlock_key`), and embargo duration.
-   - `server.mjs` sends `POST https://api.bitbop.dev/escrow/commit`.
-   - BitBop seals the payload in an AES-256-GCM hardware envelope locked behind atomic NIST beacon clocks.
-   - BitBop signs the commitment receipt using NIST FIPS 204 **ML-DSA-44** (post-quantum digital signature).
-
-2. **Claim Phase (Recipient):**
-   - Recipient navigates to `/?escrow_id=...`.
-   - The browser executes **zero network requests** to the `SecretSender` application server during claim and reveal!
-   - The browser locally generates an ephemeral NIST FIPS 203 **ML-KEM-768** keypair (`kyber_pk`, `kyber_sk`).
-   - The browser sends `POST https://api.bitbop.dev/escrow/reveal` transmitting `{ escrow_id, kyber_public_key, unlock_key }`.
-
-3. **Authoritative Hardware Invariant Enforcement:**
-   - **Time-Lock Check:** If the atomic clock timestamp has not reached the embargo expiry, BitBop strictly returns `HTTP 425 Too Early` with `{ unlock_at_iso }`. The client displays a live `HH:MM:SS` countdown timer.
-   - **PIN Authentication:** If the PIN is incorrect, BitBop returns `HTTP 403 Forbidden`. Crucially, the secret **remains intact and is NOT burned**.
-   - **Irreversible Single-Use Burn:** Upon the first valid request, BitBop releases the envelope, encapsulates the decryption key against `kyber_pk`, and **permanently shreds the escrow master key in hardware**. Any subsequent call returns `HTTP 409 Conflict`.
-
-4. **Zero-Knowledge Decryption & Provenance Verification:**
-   - The recipient's browser receives the `ML-KEM-768` ciphertext and decapsulates the shared symmetric key in memory.
-   - The browser decrypts the AES-256-GCM envelope using WebCrypto (`window.crypto.subtle`).
-   - The browser verifies the `ML-DSA-44` post-quantum digital signature receipt by calling `POST https://api.bitbop.dev/verify`.
-   - Plaintext entropy is never exposed on the wire, never transmitted to `SecretSender`, and never readable by BitBop during transit.
+Release/retention/throttling policy and the bounded same-claimant retry are upstream responsibilities, not proof of a particular hardware-erasure mechanism. Signed evidence authenticates recorded lineage/commitment/policy claims; it does not independently certify entropy quality or erase existing copies. See [README.md](../README.md) for the exact contract and [TEST_READY.md](../TEST_READY.md) for conditional receipt-field enforcement and other gaps.
 
 ### 5.2 Enterprise Perimeter Traversal Advantages
 
@@ -417,171 +356,17 @@ To provide a quantitative evaluation across real-world enterprise infrastructure
 
 ---
 
-## 7. Actionable Deployment Recommendations for Cloudflare
+## 7. Current Cloudflare deployment reference
 
-Based on the empirical network analysis and operational realities, `SecretSender` must **reject client-side WebRTC P2P** as a delivery mechanism. Instead, `SecretSender` should be deployed to Cloudflare following the production architecture specified below.
+The merged application already runs as a Worker with Static Assets. Follow [DEPLOYMENT.md](DEPLOYMENT.md) rather than implementing the former illustrative plaintext proxy.
 
-### 7.1 Architectural Blueprint: Cloudflare Edge Worker + BitBop Hardware Escrow Reverse Proxy
+The actual entrypoint is `worker/index.mjs`. `wrangler.jsonc` configures `nodejs_compat`, `ASSETS` from `public/` with `run_worker_first: true`, the `BITBOP_API` service binding to `bitbop-api`, and the custom-domain route. `scripts/build_cloudflare.mjs` uses `scripts/client_template.mjs` to generate static HTML and copies `mlkem.browser.js`.
 
-```
-+----------------------------------------------------------------------------------------------------+
-|                                    ENTERPRISE CLIENT BROWSERS                                     |
-|  - Desktop Chrome / Edge (Behind Zscaler / Palo Alto SWG + Symmetric NAT)                          |
-|  - Mobile Samsung S21 / iPhone (4G/5G Carrier CGNAT, Mobile Safari / Chrome)                       |
-+-------------------------------------------------+--------------------------------------------------+
-                                                  |
-                         Standard HTTPS (Port 443 / TLS 1.3) — 100% SWG Survivability
-                                                  |
-                                                  v
-+----------------------------------------------------------------------------------------------------+
-|                               CLOUDFLARE EDGE WORKER (secrets.bitbop.dev)                          |
-|                                                                                                    |
-|  1. Static Asset Serving:                                                                          |
-|     - Serves reskinned BitBop livery HTML, CSS, client JS (mlkem.browser.js)                       |
-|     - Serves brand SVGs (/favicon.svg, /badges/*.svg) with edge HTTP caching                        |
-|                                                                                                    |
-|  2. Edge Security & Rate Limiting:                                                                 |
-|     - Cloudflare WAF rate limiting on /api/* (20 req/min per IP)                                   |
-|     - Strict Security Headers: HSTS, Content-Security-Policy, X-Content-Type-Options: nosniff      |
-|                                                                                                    |
-|  3. Proxied BitBop Hardware Escrow Gateway:                                                        |
-|     - POST /api/share  -> Proxies /escrow/commit to https://api.bitbop.dev                         |
-|     - POST /api/reveal -> Proxies /escrow/reveal to https://api.bitbop.dev                        |
-|     - POST /api/verify -> Proxies /verify to https://api.bitbop.dev                               |
-|       (Eliminates cross-origin CORS barriers & shields customer IPs)                               |
-+-------------------------------------------------+--------------------------------------------------+
-                                                  |
-                            Authenticated Edge mTLS / HTTPS (Port 443)
-                                                  |
-                                                  v
-+----------------------------------------------------------------------------------------------------+
-|                               BITBOP QUANTUM HARDWARE ESCROW CLUSTER                               |
-|                                      (https://api.bitbop.dev)                                      |
-|                                                                                                    |
-|  - NIST FIPS 203 ML-KEM-768 Key Encapsulation Mechanism                                            |
-|  - NIST FIPS 204 ML-DSA-44 Post-Quantum Digital Signatures                                         |
-|  - Atomic / NIST Beacon Clock Time-Lock Embargo Enforcement (HTTP 425 Too Early)                  |
-|  - Single-Use Burn-on-Read Hardware Destruction (HTTP 409 Conflict)                                |
-|  - Zero Plaintext Storage: AES-256-GCM Envelope under hardware-derived entropy                      |
-+----------------------------------------------------------------------------------------------------+
-```
+The Worker validates Client Envelope v2 and the mandatory PIN; it is not a raw body pass-through from an old plaintext sender request to BitBop commit. The same-origin recipient proxy and local/upstream verification routes are also part of the implementation. Do not copy the former alternate TypeScript entrypoint/configuration or omit the service binding/security-header routing.
 
----
+Use `npm run build:cf` for asset generation and `npx wrangler deploy --dry-run` for local bundle inspection. `npm run deploy` publishes and belongs to a separate authorized release; it is not a health check. The lockfile/install prerequisites and development upstream configuration require attention documented in [DEPLOYMENT.md](DEPLOYMENT.md).
 
-### 7.2 Implementation Specification for Cloudflare Worker
-
-The recommended production Cloudflare deployment eliminates Node.js server maintenance while maintaining the single-server simplicity of `SecretSender`.
-
-#### `wrangler.jsonc` Configuration:
-```jsonc
-{
-  "$schema": "node_modules/wrangler/config-schema.json",
-  "name": "secretsender-edge",
-  "main": "src/worker/index.ts",
-  "compatibility_date": "2026-10-01",
-  "compatibility_flags": ["nodejs_compat"],
-  "assets": {
-    "directory": "./public",
-    "binding": "ASSETS"
-  },
-  "routes": [
-    {
-      "pattern": "secrets.bitbop.dev",
-      "custom_domain": true
-    }
-  ]
-}
-```
-
-#### Worker Reverse Proxy Implementation (`src/worker/index.ts`):
-```typescript
-interface Env {
-  ASSETS: Fetcher;
-  BITBOP_API_BASE?: string;
-}
-
-const BITBOP_UPSTREAM = "https://api.bitbop.dev";
-
-const SECURITY_HEADERS = {
-  "Strict-Transport-Security": "max-age=63072000; includeSubDomains; preload",
-  "X-Content-Type-Options": "nosniff",
-  "X-Frame-Options": "DENY",
-  "Referrer-Policy": "no-referrer",
-  "Content-Security-Policy": "default-src 'self'; script-src 'self' 'unsafe-inline'; style-src 'self' 'unsafe-inline' https://fonts.googleapis.com; font-src https://fonts.gstatic.com; connect-src 'self' https://api.bitbop.dev; img-src 'self' data:;",
-};
-
-export default {
-  async fetch(request: Request, env: Env): Promise<Response> {
-    const url = new URL(request.url);
-
-    // 1. Health Check Endpoint
-    if (url.pathname === "/health") {
-      return new Response(JSON.stringify({ status: "ok", service: "SecretSender-Cloudflare-Edge" }), {
-        headers: { "Content-Type": "application/json", ...SECURITY_HEADERS },
-      });
-    }
-
-    // 2. Proxied BitBop Escrow Commit Endpoint
-    if (url.pathname === "/api/share" && request.method === "POST") {
-      const clientIp = request.headers.get("CF-Connecting-IP") ?? "";
-      const body = await request.text();
-
-      const upstreamResp = await fetch(`${BITBOP_UPSTREAM}/escrow/commit`, {
-        method: "POST",
-        headers: {
-          "Content-Type": "application/json",
-          "X-Forwarded-For": clientIp,
-        },
-        body,
-      });
-
-      const respHeaders = new Headers(upstreamResp.headers);
-      Object.entries(SECURITY_HEADERS).forEach(([k, v]) => respHeaders.set(k, v));
-
-      return new Response(upstreamResp.body, {
-        status: upstreamResp.status,
-        headers: respHeaders,
-      });
-    }
-
-    // 3. Fallback: Serve Static UI & Livery Assets (HTML, SVG badges, mlkem.browser.js)
-    const assetResp = await env.ASSETS.fetch(request);
-    const modifiedHeaders = new Headers(assetResp.headers);
-    Object.entries(SECURITY_HEADERS).forEach(([k, v]) => modifiedHeaders.set(k, v));
-
-    return new Response(assetResp.body, {
-      status: assetResp.status,
-      headers: modifiedHeaders,
-    });
-  },
-};
-```
-
----
-
-### 7.3 Why This Architecture Dominates WebRTC P2P in Corporate Environments
-
-1. **Universal Corporate SWG & Firewall Survivability (100%):**  
-   Every transaction is standard HTTPS (TLS 1.3 over TCP port 443). The traffic appears as normal REST API traffic to Zscaler, Palo Alto App-ID, and Netskope. No protocol anomaly alerts or binary STUN evasions are triggered.
-2. **True Store-and-Forward Time-Locks:**  
-   The sender can seal a secret, send an SMS, and shut down their computer. Secrets remain securely locked in BitBop's hardware enclave until the atomic clock embargo expires, completely independent of device state.
-3. **Hardware-Enforced Burn-on-Read:**  
-   Single-use unsealing is enforced cryptographically in hardware. The recipient's first unseal shreds the master key; duplicate unseal requests are rejected with `HTTP 409 Conflict`. Incorrect PIN attempts return `HTTP 403 Forbidden` without burning the secret.
-4. **Zero-Knowledge Post-Quantum Secrecy:**  
-   Client-side NIST FIPS 203 ML-KEM-768 key encapsulation and AES-256-GCM ensure that neither Cloudflare's edge workers nor BitBop's escrow infrastructure ever possess the plaintext secret.
-5. **No Client Signaling Overhead:**  
-   Eliminates all dependencies on `0.peerjs.com`, STUN/TURN servers, and complex ICE state negotiation, reducing client JavaScript bundle size and mobile battery drain.
-
----
-
-### 7.4 Optional Future Extension: WebRTC Ephemeral In-Session Signaling
-
-If `SecretSender` is ever expanded to include real-time, peer-to-peer ephemeral text chat *during the active moment when both parties happen to be viewing the decrypted secret simultaneously*, the team should implement the following hardening measures:
-
-1. **Eliminate `0.peerjs.com`:**  
-   Deploy a custom signaling server using **Cloudflare Durable Objects** with WebSockets on the customer's own domain (`wss://secrets.bitbop.dev/ws/signaling`). This circumvents all commercial P2P domain reputation blocks.
-2. **Tunnel TURN inside WebSockets:**  
-   To bypass SWG TLS inspection that blocks TURNS binary framing on TCP 443, wrap STUN/TURN packets inside standard WebSocket binary frames (`WSS`) or HTTP/2 streams connecting to an edge worker proxy. Enterprise SWGs permit WebSocket traffic to authenticated corporate subdomains.
+No STUN, TURN, PeerJS, sender-online requirement or external Cloud Run host is needed for the implemented core flow. A network review must still verify the intended HTTPS application/upstream paths and corporate policy; this document's historical percentages do not guarantee compatibility.
 
 ---
 

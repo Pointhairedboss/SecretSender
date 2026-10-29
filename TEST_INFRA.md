@@ -1,166 +1,70 @@
-# TEST_INFRA.md: E2E Testing Track Architecture & Methodology
+# SecretSender v1.1 verification procedures
 
-**Project**: SecretSender (BitBop Livery Reskin, Physical S21 UAT & Corporate Assessment)  
-**Author**: E2E Test Track Architect / Test Writer (`test_writer_e2e_1`)  
-**Status**: Active  
-**Last Updated**: 2026-10-22  
+Use [README.md](README.md) for the wire contract and [docs/DEPLOYMENT.md](docs/DEPLOYMENT.md) for prerequisites and setup. [TEST_READY.md](TEST_READY.md) separates historical reported results, current review evidence and implementation gaps.
 
----
+## Local regression commands
 
-## 1. Testing Philosophy & Principles
+Install dependencies using the documented lockfile workaround, then install Chromium and build:
 
-The SecretSender E2E Testing Track adheres to an **opaque-box, requirement-driven testing philosophy** designed to rigorously validate functional, cryptographic, stylistic, and invariant contracts without relying on internal implementation details.
-
-### Core Principles
-1. **Opaque-Box Verification**: Tests interact strictly with public interfaces (HTTP routes, headers, HTML/CSS DOM structure, WebCrypto and ML-KEM-768 post-quantum cryptographic primitives, and BitBop Escrow API contracts).
-2. **Deterministic & Hermetic Execution**: The test harness includes an in-process, high-fidelity mock BitBop Escrow server implementing the complete ML-KEM-768 + AES-256-GCM + ML-DSA-44 protocol. This guarantees 100% reproducible execution offline or in CI without network latency, rate limits, or external server outages, while supporting live API testing via `BITBOP_API_BASE`.
-3. **Progressive Testability**: Tests are stratified into 4 tiers so that baseline server and asset capabilities are validated first, followed by edge cases, cross-feature interactions, and full real-world scenarios.
-4. **Authoritative Expected Output Derivation**: Expected outputs are derived directly from `ORIGINAL_REQUEST.md`, `PROJECT.md`, and official BitBop design specifications (`c:\code\projects\bitbop-quantum-node\web`), rather than reflecting arbitrary server responses.
-5. **Zero-Dependency Lightweight Architecture**: Aligned with SecretSender's single-server ESM architecture, tests utilize Node.js native test runner and assertion libraries (`node:test`, `node:assert/strict`) requiring zero build steps or heavy test frameworks.
-
----
-
-## 2. 4-Tier Testing Methodology
-
-The test suite is structured around a rigorous 4-tier methodology:
-
-```
-+--------------------------------------------------------------------------+
-| Tier 4: Real-World Scenarios                                             |
-| E2E secret transfer, adversary PIN attack, timelock auto-reveal, S21 UAT |
-+--------------------------------------------------------------------------+
-                                    ^
-+--------------------------------------------------------------------------+
-| Tier 3: Cross-Feature Combinations (Pairwise Combinatorial)              |
-| Timelock + Wrong PIN, Timelock + Valid Claim, SMS link + Unicode payload |
-+--------------------------------------------------------------------------+
-                                    ^
-+--------------------------------------------------------------------------+
-| Tier 2: Boundary & Corner Cases (Boundary Value Analysis)                |
-| Empty payloads, max-size secrets, 0s embargo, wrong PINs, double-claims  |
-+--------------------------------------------------------------------------+
-                                    ^
-+--------------------------------------------------------------------------+
-| Tier 1: Feature Coverage (Category-Partition Equivalence Classes)         |
-| >=5 test cases per core feature: static assets, livery, seal, claim, err |
-+--------------------------------------------------------------------------+
-```
-
-### Tier 1: Feature Coverage (Category-Partition)
-Covers all baseline equivalence partitions across core features with at least 5 distinct test cases per feature category:
-- **Category 1A (Static Asset Delivery & HTTP Mime Types)**: Root HTML `/`, client crypto bundle `/mlkem.browser.js`, health check `/health`, SVG icons `/favicon.svg`, brand badges `/badges/*`, and 404 routing.
-- **Category 1B (BitBop Livery & Design Tokens)**: Surface palette (`#0F1012`, `#0B0C0E`, `#16181D`), action button colors (`#FFD600`, text `#1A1600`, hover `#FFE14D`), telemetry accents (`#10B981`), typography (`Space Grotesk`, `Inter`, `JetBrains Mono`), and glider-grid / scanner-line styling.
-- **Category 1C (Admin Secret Sealing API)**: Payload sealing via `POST /api/share`, custom PIN preservation, auto-generated PIN creation, receipt verification, context hash nonce invariant (zero password entropy leaked).
-- **Category 1D (Claim Flow & Post-Quantum Decryption)**: Client ML-KEM-768 keypair generation, public key encoding, decapsulation, AES-256-GCM envelope decryption, and zero SecretSender server request invariant during claim.
-- **Category 1E (Error Codes & Security Invariants)**: Missing password (400/500), wrong unlock key (403 non-burn), burned secret (409 burn-on-read), active timelock embargo (425 Too Early).
-
-### Tier 2: Boundary Value Analysis & Edge Cases
-Evaluates extreme inputs, resource boundaries, and non-standard states:
-- Empty secret string and whitespace-only secret rejection.
-- Large payload boundary stress (64KB - 256KB+ secrets) verifying base64 expansion and decryption integrity.
-- Zero-second embargo (`unlockAfterSeconds: 0`) and negative embargo duration normalization.
-- Long embargo periods (e.g. 30 days) and ISO date string handling.
-- Wrong PIN variations (mismatched length, special characters, unicode PINs) proving non-burn behavior.
-- Double-claim attempts verifying strict burn-on-read enforcement (first 200, second 409).
-- Malformed timestamps and non-JSON request bodies.
-
-### Tier 3: Cross-Feature Combinations (Pairwise Combinatorial)
-Validates interactions between disparate system features:
-- **Timelock Embargo + Wrong PIN**: Premature unlock attempt with wrong PIN triggers proper status without compromising burn state.
-- **Timelock Embargo + Valid Claim**: Countdown expiration auto-transition from locked state to successful reveal.
-- **SMS Handoff Link + Mobile Viewport**: Special character URL encoding (`sms:?body=...`) ensuring query strings do not break SMS URI schemes or cause mobile viewport overflow.
-- **Custom PIN + Far-Future Embargo + Multi-byte Unicode**: Japanese, emoji, and binary payloads sealed with custom PIN and future unlock timestamp.
-- **Flight Recorder Seam + Dev vs Prod Gating**: `window.__uatRecorder` active on localhost or `?uat=1`, correctly reporting busy states and DOM telemetry.
-
-### Tier 4: Real-World Application Scenarios
-Simulates realistic end-to-end user journeys and architecture verification:
-- **Scenario 1 (Full Secret Transfer Journey)**: Alice seals a database password, copies SMS handoff link; Bob opens claim link on mobile, enters PIN, browser executes client-side ML-KEM-768 + AES-256-GCM decryption, verifies ML-DSA-44 provenance receipt; subsequent claim attempts are rejected.
-- **Scenario 2 (Adversary Tamper & Brute-Force Defense)**: Eve intercepts claim URL and tests candidate PINs; receives HTTP 403 without burning the secret; legitimate recipient enters correct PIN and recovers secret; subsequent adversary attempts receive HTTP 409 permanently burned.
-- **Scenario 3 (Time-Locked Embargo Countdown & Auto-Reveal)**: Sender schedules a time-locked secret; recipient loads claim page before embargo and sees active countdown; countdown expires (`00:00:00`); client auto-initiates browser decryption and reveals secret.
-- **Scenario 4 (Hardware S21 & Corporate Architecture Audit)**: Validates formal assertions for Features 14-23: UAT plan coverage, S21 ADB hardware tunnel configuration, and Corporate P2P / Cloudflare hop table completeness.
-
----
-
-## 3. Feature Inventory Coverage Table (Features 1-24)
-
-| Feature # | Feature Name | Mapped Test Tier | Test Module | Verification Method |
-|:---:|:---|:---:|:---|:---|
-| **1** | Single-Server Node Architecture | Tier 1 | `tier1_features.test.mjs` | Spawns `server.mjs` directly with 0 build steps; verifies HTTP listeners, routes, and memory footprint. |
-| **2** | Static SVG Brand Asset Serving | Tier 1 | `tier1_features.test.mjs` | Verifies `/favicon.svg` and `/badges/*` return `HTTP 200` with `image/svg+xml; charset=utf-8`. |
-| **3** | BitBop Surface Palette & Patterns | Tier 1 | `tier1_features.test.mjs` | Inspects DOM CSS rules for `#0F1012`, `#0B0C0E`, `#16181D`, `#262932`, `.glider-grid`, `.scanner-line`. |
-| **4** | BitBop Action & Telemetry Colors | Tier 1 | `tier1_features.test.mjs` | Validates `#FFD600` primary buttons, `#1A1600` text, `#10B981` telemetry, `#F87171` errors, focus outlines. |
-| **5** | BitBop Typography System | Tier 1 | `tier1_features.test.mjs` | Validates font imports and styling for `Space Grotesk`, `Inter`, and `JetBrains Mono`. |
-| **6** | Responsive Admin View (S21) | Tier 1, 3 | `tier1_features.test.mjs`, `tier3_combinations.test.mjs` | Validates viewport meta tags, max-width constraints (<=480px), and box-sizing rules preventing horizontal overflow. |
-| **7** | Responsive Claim View (S21) | Tier 1, 3 | `tier1_features.test.mjs`, `tier3_combinations.test.mjs` | Validates `#claim-view` layout, word-break on monospace secret displays, and viewport boundaries. |
-| **8** | ML-KEM-768 & AES-256-GCM Core | Tier 1, 4 | `tier1_features.test.mjs`, `tier4_scenarios.test.mjs` | End-to-end execution of ML-KEM-768 decapsulation and WebCrypto AES-256-GCM decryption with test vectors. |
-| **9** | ML-DSA-44 Post-Quantum Provenance | Tier 1, 4 | `tier1_features.test.mjs`, `tier4_scenarios.test.mjs` | Verifies receipt structure (`beacon_sequence`, signature, valid flag) via `POST /verify`. |
-| **10** | Timelock Embargo & Countdown | Tier 2, 3, 4 | `tier2_boundaries.test.mjs`, `tier3_combinations.test.mjs`, `tier4_scenarios.test.mjs` | Validates `unlock_after_seconds`, `unlockAtIso`, countdown timer logic, and HTTP 425 responses. |
-| **11** | Zero Server Request Invariant | Tier 1, 4 | `tier1_features.test.mjs`, `tier4_scenarios.test.mjs` | Monitors server traffic during claim/reveal to assert zero queries hit SecretSender server. |
-| **12** | Error & Security Invariants | Tier 1, 2, 4 | `tier1_features.test.mjs`, `tier2_boundaries.test.mjs`, `tier4_scenarios.test.mjs` | Verifies HTTP 403 (wrong PIN, secret preserved) and HTTP 409 (burn-on-read permanent destruction). |
-| **13** | Native SMS Handoff Link | Tier 1, 3 | `tier1_features.test.mjs`, `tier3_combinations.test.mjs` | Validates `sms:?body=...` URI format, encoding of claim URL, PIN, and provenance parameters. |
-| **14** | Formal UAT Test Plan | Tier 4 | `tier4_scenarios.test.mjs` | Verifies existence, completeness, test ID coverage, and step definitions in `docs/UAT_PLAN.md`. |
-| **15** | White-Box Flight Recorder Seam | Tier 3 | `tier3_combinations.test.mjs` | Validates `window.__uatRecorder`, `window.__uatState()`, `window.__uatBusy()` presence and gating. |
-| **16** | Hardware S21 Connectivity & Tunnels | Tier 4 | `tier4_scenarios.test.mjs` | Validates ADB command contracts, reverse tunnel `tcp:5179`, and forward CDP `tcp:9222`. |
-| **17** | Deterministic Playwright-over-ADB Suite | Tier 4 | `tier4_scenarios.test.mjs` | Verifies executable test definitions in `scripts/run_s21_deterministic_uat.ts`. |
-| **18** | Model-Driven UAT Persona Loop | Tier 4 | `tier4_scenarios.test.mjs` | Verifies model persona runner scripts and telemetry collection logic. |
-| **19** | Machine-Readable UAT Reports | Tier 4 | `tier4_scenarios.test.mjs` | Validates JSON report schema, dead click counters, and viewport overflow tracking in `logs/uat/`. |
-| **20** | Hop-by-Hop Protocol & Port Table | Tier 4 | `tier4_scenarios.test.mjs` | Validates 7-hop protocol analysis in `docs/CORPORATE_P2P_CLOUDFLARE_ASSESSMENT.md`. |
-| **21** | Enterprise Security Controls Analysis | Tier 4 | `tier4_scenarios.test.mjs` | Validates firewall, SWG, TLS inspection, and GPO evaluation in assessment document. |
-| **22** | Synchronous vs Store-and-Forward | Tier 4 | `tier4_scenarios.test.mjs` | Validates operational mismatch analysis between WebRTC P2P and timelocked secret escrow. |
-| **23** | Compatibility Matrix & Recommendations | Tier 4 | `tier4_scenarios.test.mjs` | Validates 4+ corporate network archetypes and actionable Cloudflare deployment architecture. |
-| **24** | E2E Testing Track & Final Verification | Tier 1-4 | `runner.mjs`, `TEST_READY.md` | Orchestrates 100% pass across all test tiers and publishes `TEST_READY.md`. |
-
----
-
-## 4. Test Directory Layout & Architecture
-
-```
-c:\code\projects\SecretSender\
-├── TEST_INFRA.md                          # Test track architecture specification (this file)
-├── TEST_READY.md                          # Readiness report and execution results
-├── package.json                           # Configured with "test": "node tests/e2e/runner.mjs"
-└── tests/
-    └── e2e/
-        ├── harness.mjs                    # Shared test harness (server lifecycle, client crypto, mock BitBop)
-        ├── mock_bitbop_server.mjs         # High-fidelity BitBop Escrow API mock (ML-KEM-768, AES-GCM, ML-DSA-44)
-        ├── tier1_features.test.mjs        # Tier 1: Core Feature Coverage (>=5 tests per core feature)
-        ├── tier2_boundaries.test.mjs      # Tier 2: Boundary Value Analysis & Edge Cases
-        ├── tier3_combinations.test.mjs    # Tier 3: Cross-Feature Pairwise Combinations
-        ├── tier4_scenarios.test.mjs       # Tier 4: Real-World Scenarios & Architecture Verification
-        └── runner.mjs                     # Master test suite runner
-```
-
----
-
-## 5. Execution Instructions
-
-### Running the Entire Suite
 ```bash
-# Using standard npm script:
+npx playwright install chromium
+npm run build:cf
 npm test
-
-# Or invoking the runner directly:
-node tests/e2e/runner.mjs
+node tests/verify_m1_challenger2.mjs
+node --test --test-reporter=tap tests/adversarial_challenge_m1.test.mjs
 ```
 
-### Running Specific Tiers
+The E2E runner supports `node tests/e2e/runner.mjs --tier=1` through `--tier=4`. Tier 4 includes an actual headless browser test; a full pass needs Playwright's Chromium or its fallback installed Chrome channel.
+
+For explicit machine-readable counts, run the files directly:
+
 ```bash
-node tests/e2e/runner.mjs --tier=1
-node tests/e2e/runner.mjs --tier=2
-node tests/e2e/runner.mjs --tier=3
-node tests/e2e/runner.mjs --tier=4
+node --test --test-reporter=tap --test-concurrency=1 tests/e2e/tier*.test.mjs
 ```
 
-### Running Against Live BitBop API (Optional Override)
+The npm runner parses TAP `# tests`/`# pass`/`# fail` lines. On runtimes selecting the spec reporter by default it can print `0/0` despite executed tests; retain the explicit TAP output and exit status instead of relying on that summary.
+
+| Suite | What executes | Boundary of its evidence |
+| --- | --- | --- |
+| `npm test` / E2E tier files | The real SecretSender Worker with a local HTTP adapter and test `ASSETS` binding; local cryptographic BitBop test service; browser test in Tier 4 | Exercises source and browser behavior. The upstream is a test double, not production BitBop or physical entropy |
+| `verify_m1_challenger2.mjs` | Template/source checks, asset equality, HTTP behavior and concurrency | Source/adapter verification, not a deployed Cloudflare attestation |
+| `adversarial_challenge_m1.test.mjs` | Methods, malformed inputs, traversal and leakage checks through that local adapter | Does not reproduce every Cloudflare network/WAF behavior |
+| `cross_repo_live_bitbop.test.mjs` | Imported BitBop Worker and coordinator backed by in-memory SQLite/KV and deterministic synthetic entropy/test signing keys | Local cross-repository integration, despite “live” in its filename; no production endpoint or collector validation |
+
+`tests/e2e/harness.mjs` imports `worker/index.mjs` and `buildHtml` directly. It creates a local cryptographic upstream with ephemeral ML-DSA-44 keys and injects the matching **test public key** into served browser assets and Worker env. It retains a simulated upstream and Node HTTP adapter for isolation; removal of the old mock-server file does not mean tests run against real hardware. The deleted standalone application server and separate mock-server file are not dependencies.
+
+Setting a shell `BITBOP_API_BASE` does not convert `npm test` into a production test: the harness supplies its own upstream and `BITBOP_API` binding. Do not describe the test suite as a live-service health check.
+
+## Cross-repository integration
+
+The test imports `../bitbop-quantum-node/source_payload/index.js` relative to the SecretSender checkout's parent. Place a compatible `bitbop-quantum-node` checkout beside `SecretSender`, install that repository's documented dependencies, and record both commit SHAs. Node must provide `node:sqlite` / `DatabaseSync`; Node 20 alone does not satisfy this test.
+
 ```bash
-BITBOP_API_BASE=https://api.bitbop.dev node tests/e2e/runner.mjs
+node tests/cross_repo_live_bitbop.test.mjs
 ```
-*(By default, the harness starts an internal high-fidelity mock server for 100% hermetic offline execution).*
 
----
+Read the test before execution if either repository has changed. The checked-in version imports both Workers and constructs local env objects, in-memory storage, test keys and synthetic beacon data. It checks quota, status, PIN handling, two-layer decryption, five-minute same-claimant retry and competing-claimant `409` behavior. A pass does not independently confirm current public deployment or the entropy pipeline.
 
-## 6. Exit Codes & Reporting
+## Synthetic self-test
 
-- **Exit 0**: All test cases in all configured tiers passed cleanly.
-- **Exit 1**: One or more test assertions failed, or an unhandled error occurred during test setup/execution.
-- The runner emits structured, colored terminal output with execution timings, per-tier breakdown, and detailed error diagnostics.
+On an isolated test target, `POST /api/reflect` accepts JSON actions:
+
+| Action | Input | Effect |
+| --- | --- | --- |
+| `ping` (default) | `{"action":"ping"}` | Returns edge telemetry; no escrow claim |
+| `seal` | `action`, optional test `pin`, embargo/TTL; bearer token or configured `BITBOP_API_KEY` | Creates an internally fixed synthetic envelope; returns `share.escrow_id`, test PIN and fragment-free base URL |
+| `claim` | `action`, synthetic `escrow_id` (or fragment-free `claim_url`), test `pin`/`unlock_key` | Checks status, mandatory wrong-PIN `403`, valid reveal/decrypt, local and upstream signatures, distinct-claimant `409` |
+
+The fixed test plaintext is `SYNTHETIC-REFLECTOR-PROBE-V2`; the diagnostic key is 32 zero bytes, encoded as 43 `A` characters. These public constants are for the restricted diagnostic, never normal shares. Caller-supplied `password`, `secret`, `plaintext`, `synthetic_secret`, `link_key` and `link_key_b64u` are rejected, as is any supplied `claim_url` containing `#`. These checks do not establish that a caller-supplied escrow ID was created by the diagnostic. Never point `claim` at a real escrow ID/PIN.
+
+Synthetic `seal` uses `is_sample: false` and normal quota; `claim` consumes that synthetic share. Check HTTP status, `ok === true` and every returned `steps[].passed === true`. An incomplete/failed claim returns a failure (normally `422` for `ok: false`), not a partial success. A `ping` response or an empty set of successful observations is insufficient evidence.
+
+The browser's **Run 45s Sample Demo** is separate: it uses fresh browser encryption and `is_sample: true`. Its label does not force a 45-second embargo. Only synthetic content belongs in demonstrations and UAT. See [external diagnostics](docs/EXTERNAL_AGENT_REFLECTOR_ARCHITECTURE.md).
+
+## Browser acceptance and deployment verification
+
+Use [docs/UAT_PLAN.md](docs/UAT_PLAN.md) to verify the full-link/PIN flow, session expiry, evidence checks and redaction. Inspect network requests to confirm that the normal browser never submits the plaintext or link key; expect same-origin status/reveal/verify traffic. Verify copied/SMS links without truncating the fragment.
+
+The `uat:deterministic`, `uat:model` and `uat:external` package scripts exist, but require a physical device, their configured browser/target and possibly an external model or reflector. The deterministic/model runners and `config/uat.config.json` still contain pre-v1.1 assumptions (blank sender PIN, no explicit sender key, fragment-free claim links or zero same-origin claim requests). Treat them as unvalidated tooling until reconciled. Their existence and old `logs/uat/` reports are not fresh acceptance evidence.
+
+For deployment verification, record the actual deployed version independently, check `/health` and headers, and use dedicated synthetic browser shares on an approved test target. Local suites, a signed receipt or a successful reflector call alone do not establish production correctness, hardware entropy quality or absence of all plaintext leakage.
