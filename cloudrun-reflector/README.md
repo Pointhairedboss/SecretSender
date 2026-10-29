@@ -1,38 +1,26 @@
-# Google Cloud Run — Multi-Agent UAT Reflector (`uat-agent-reflector`)
+# Optional external diagnostic host — not the SecretSender runtime
 
-A **scale-to-zero (`--min-instances=0`)** Google Cloud Run container that provides an external full-browser (`Playwright Chromium` + `WebRTC` + `WebCrypto` + `ML-KEM-768` + `window.__uatRecorder`) peer outside your network and outside Cloudflare, funded by your Google Cloud credits.
+The SecretSender application is [`worker/index.mjs`](../worker/index.mjs) with Static Assets. This directory's separate `server.mjs` is optional external diagnostic/browser/model tooling; it is not the deleted root Node application server. The [application deployment guide](../docs/DEPLOYMENT.md) is authoritative for v1.1.
 
-## Capabilities (`POST /reflect`)
+## Current interfaces and limits
 
-| `action` | Mode | Description |
-| :--- | :--- | :--- |
-| `"ping"` | Fast | Returns GCP region (`australia-southeast1`), Cloud Run revision (`K_REVISION`), and external GCP egress IP (`egressIp`). |
-| `"seal"` | Protocol | Seals a secret via `POST https://secrets.bitbop.dev/api/share` from Google Cloud's network. |
-| `"claim"` | Protocol | Executes `ML-KEM-768` keygen + `POST /escrow/reveal` (`403` wrong PIN probe, `200` valid decrypt, `409` burn recheck) + `ML-DSA-44` `/verify` from Google Cloud. |
-| `"browser_seal"` | **Full Chromium** | Launches headless Chromium inside Cloud Run, navigates to `https://secrets.bitbop.dev/?uat=1`, seals a secret via real DOM clicks, and returns the `window.__uatRecorder` telemetry log. |
-| `"browser_claim"` | **Full Chromium** | Launches headless Chromium inside Cloud Run, opens the Claim URL, decrypts the secret in the browser DOM, and returns the `window.__uatRecorder` telemetry log. |
-| `"browser_session"` | **Universal WebRTC / Multi-App** | Opens **any** URL (`https://dungeon.bitbop.dev`, `https://pooled.run`, `https://secrets.bitbop.dev`) in Chromium with WebRTC/TURN enabled, executes scripted DOM steps, and returns `window.__uatRecorder` telemetry + optional PNG screenshot. |
-| `"hermes_uat"` | **Hermes Google Endpoint Loop** | Loads `hermes.yaml` (`provider: gemini`, `https://generativelanguage.googleapis.com/v1beta/openai` + Vertex AI fallback), sends the live Chromium DOM snapshot to Gemini (`gemini-2.5-flash`), executes the LLM-planned UAT steps in headless Chromium, and returns the reasoning trace + `window.__uatRecorder` log. |
+| Interface | Current purpose / limit |
+| --- | --- |
+| `POST /reflect` with `ping` | External-host telemetry |
+| `POST /reflect` with `seal` / `claim` | Fixed synthetic envelope/key protocol diagnostics; never real secrets |
+| `browser_seal` / `browser_claim` | Optional headless browser actions; their paired link-key handoff is incomplete |
+| `browser_session` / `hermes_uat` | General browser/model tooling with broader capabilities; not the Worker's restricted synthetic endpoint |
 
-## Hermes Google Endpoint Configuration (`hermes.yaml`)
+Protocol `seal` constructs Client Envelope v2 with internal `SYNTHETIC-REFLECTOR-PROBE-V2` content and the public fixed diagnostic key, uses a test PIN and `is_sample: false`, and calls the target application's encrypted `/api/share` path. It may use a caller bearer token or configured `BITBOP_API_KEY` and attempts an explicit free-key request if neither is available. Normal quotas and consuming reveal behavior still apply.
 
-`cloudrun-reflector/hermes.yaml` configures the Google Gemini / Vertex AI endpoints (`_config_version: 50`):
-- **Primary Provider (`gemini`)**: `https://generativelanguage.googleapis.com/v1beta` (native) & `https://generativelanguage.googleapis.com/v1beta/openai` (`chat_completions`), default model `gemini-2.5-flash`.
-- **Fallback Provider (`google-vertex`)**: `https://australia-southeast1-aiplatform.googleapis.com/v1/projects/gen-lang-client-0057994039/locations/australia-southeast1/endpoints/openapi` (authenticating via Cloud Run's built-in GCP Metadata Server token if `GOOGLE_API_KEY` is omitted).
+`handleReflect` rejects caller-supplied `password`, `secret`, `plaintext`, `synthetic_secret`, `link_key`, `link_key_b64u` and fragment-bearing `claim_url`. Never provide a real share ID/PIN: the restriction does not prove that the ID belongs to the synthetic diagnostic and cannot prevent upstream consumption of a mistakenly supplied share.
 
-## 1-Command Deployment to Google Cloud Run
+**Known browser-tooling discrepancy:** `browser_seal` creates a normal random-key browser share but returns a URL with the fragment removed. `browser_claim` appends the fixed synthetic key. Do not claim this pair validates arbitrary browser-created shares end to end. [TEST_READY.md](../TEST_READY.md) records this and the other verification gaps.
 
-```powershell
-powershell -ExecutionPolicy Bypass -File .\cloudrun-reflector\deploy-cloudrun.ps1
-```
+## Configuration reference
 
-## Running the Split-Horizon S21 + Multi-Agent Cloud Swarm
+The code reads `PORT` (default 8080), `SECRETSENDER_ORIGIN` (default public SecretSender), `BITBOP_API_BASE` (default public BitBop), optional `REFLECTOR_TOKEN` and `BITBOP_API_KEY`, plus its Hermes/model configuration. These settings belong to this diagnostic process, not to the application Worker. Inspect `server.mjs`, `hermes.yaml`, `package.json` and the deployment script before a separately scoped diagnostic-host change.
 
-Once deployed, point `UAT_REFLECTOR_URL` at your Cloud Run service URL:
+Existing deployment scripts and Docker files are tooling artifacts, not instructions to publish a production secret-processing service. Provisioning or changing an external host is unnecessary for local regression and is outside this documentation correction. Do not rely on former cost, availability or live-host claims as verified facts.
 
-```powershell
-$env:UAT_REFLECTOR_URL = "https://uat-agent-reflector-<hash>-ts.a.run.app/reflect"
-
-# Run standard 6-step S21 <-> Cloud Run split-horizon UAT + 5 parallel full-browser Cloud Run agents:
-node scripts/run_external_s21_reflector_uat.mjs --swarm 5 --browser
-```
+For the Worker's restricted self-test, use [the diagnostic guide](../docs/EXTERNAL_AGENT_REFLECTOR_ARCHITECTURE.md) and [local verification procedures](../TEST_INFRA.md). Production secret creation and decryption stay in the sender/recipient browsers.

@@ -1,136 +1,50 @@
-# TEST_READY.md: E2E Test Suite Readiness Declaration
+# SecretSender v1.1 verification status and follow-up findings
 
-**Project**: SecretSender (BitBop Livery Reskin, Physical S21 UAT & Corporate Assessment)  
-**Architect / Test Writer**: `test_writer_e2e_1`  
-**Date**: 2026-10-22  
-**Test Suite Status**: **READY (100% Pass)**  
-**Total Tiers**: 4  
-**Total Test Cases**: 62  
-**Pass Rate**: 100% (62/62 passing, 0 failing, 0 skipped)  
-**Execution Time**: ~3.78 seconds  
+This page records the limits of the available evidence; it is not a production-readiness declaration. The documentation review on 30 October 2026 used main commit `16921db57c285cd3fcdebd72243f04a1d7fb6557`, after Remediation v1.1 and the `run_worker_first` follow-up. Runtime, dependency and cryptographic code are unchanged by this documentation PR.
 
----
+## Previously reported evidence
 
-## 1. Executive Summary
+[PR #1](https://github.com/Pointhairedboss/SecretSender/pull/1) reports **61 passing E2E tests, 195 verification checks, 92 adversarial tests**, and successful cross-repository testing. Those are the merged PR's reported results, not independent confirmation of today's production deployment. Older 62-test readiness claims and stored S21 reports predate the remediation and do not describe this release.
 
-The E2E Testing Track infrastructure for `SecretSender` is fully implemented, verified, and ready for deployment. The test suite operates on a pure **opaque-box, requirement-driven methodology** spanning 4 structured tiers:
-1. **Tier 1 (Core Feature Coverage)**: 29 tests covering static asset serving, MIME types, livery tokens, responsive viewport constraints, Admin sealing API, client-side ML-KEM-768 decapsulation, WebCrypto AES-256-GCM decryption, provenance verification, and security error codes.
-2. **Tier 2 (Boundary Value Analysis & Edge Cases)**: 18 tests evaluating empty secret strings, payload size stress up to 256KB, 0-second and negative embargo normalization, fractional rounding, 30-day embargoes, malformed ISO timestamps, whitespace trimming, special character and unicode PINs, and concurrent race-condition double claims.
-3. **Tier 3 (Cross-Feature Pairwise Combinations)**: 8 tests validating multi-feature interactions including premature timelock probes with wrong PINs, auto-transition upon countdown expiration, SMS handoff link parameter formatting without mobile viewport overflow, unicode payloads with far-future embargoes, and flight recorder dev/prod gating.
-4. **Tier 4 (Real-World Application Scenarios)**: 7 tests executing end-to-end user journeys (Alice seals -> Bob claims -> decrypts -> provenance verified -> burned), adversary brute-force defense (403 non-burning -> legitimate claim -> 409 replay rejection), timelock auto-reveal countdown synchronization, and architectural contracts for ADB hardware tunnels and corporate assessment matrices.
+## Checks performed for this documentation review
 
-The entire suite executes via standard Node.js ESM built-in testing modules (`node:test`, `node:assert/strict`) with zero external test runners or bundlers required, preserving SecretSender's single-server ESM philosophy.
+The local environment used Node `24.22.1`. Dependencies were installed with `npm install --package-lock=false --ignore-scripts --no-audit --no-fund` after reproducing the committed lockfile failure. No dependency/lockfile changes are included.
 
----
+| Check | Observed result |
+| --- | --- |
+| `npm ci --ignore-scripts --no-audit --no-fund` (with bounded fetch options) | Failed: lockfile missing `@noble/post-quantum@0.6.1` and transitive entries |
+| `npm run build:cf` | Passed |
+| `npx wrangler deploy --dry-run` with a temporary output directory | Passed with Wrangler `4.156.0`; bundle/static-assets and declared bindings inspected; no publish |
+| `node tests/verify_m1_challenger2.mjs` | **195/195 passed** locally |
+| `node --test --test-reporter=tap tests/adversarial_challenge_m1.test.mjs` | **92/92 passed** locally |
+| `npm test` | Failed on missing Chromium/Chrome for the browser case; its reporter-dependent summary showed `0/0` counts |
+| Direct E2E files with explicit TAP and `--test-concurrency=1` | **60/61 passed**; the headless-browser case failed because no supported browser executable was available |
+| Direct E2E files with default file concurrency | **59/61 passed**; browser unavailable plus the test upstream's concurrent-claim race described below |
+| `npx playwright install chromium` | Failed: downloaded archives could not be unpacked (truncated/invalid ZIP); no browser E2E pass claimed |
+| Signature-verifier probe with ephemeral test keys | Both Worker and browser-bundle verifiers accepted signed v2 evidence without a delivery signature or envelope commitment |
+| Envelope-size probe with synthetic content | Worker validator accepted an encrypted 513-byte plaintext equivalent, above the sender UI's 512-byte limit |
 
-## 2. Test Execution Commands
+The cross-repository test was inspected but not rerun: a matching sibling BitBop checkout was not present. No production endpoints were used for escrow tests; no production keys, deployment or entropy-pipeline state were changed. A Wrangler dry run is a local packaging check, not remote readiness evidence.
 
-### Full Regression Suite
-```bash
-# Via standard npm script:
-npm test
+## Implementation and tooling discrepancies to review separately
 
-# Via direct node runner:
-node tests/e2e/runner.mjs
-```
+These findings explain the documentation's qualifications. They are not cryptographic changes or claims of a demonstrated production exploit.
 
-### Single Tier Execution
-```bash
-# Tier 1: Core Feature Coverage (29 tests)
-node tests/e2e/runner.mjs --tier=1
+| Finding | Source / evidence | Consequence |
+| --- | --- | --- |
+| Clean install is blocked; declared Node minimum is too low for a dependency | `package-lock.json` omits the Noble dependency declared by `package.json`; installed `@noble/post-quantum@0.6.1` requires Node >=20.19.0 | Repair lockfile/runtime requirements separately. The documented install workaround is for local development, not a reproducible release |
+| The local upstream has a concurrent-claim race | `tests/e2e/harness.mjs` checks `rec.claimed`, awaits KEM/encryption, then sets it. Under file-parallel E2E execution, B4.1 observed `[200,200]` instead of `[200,409]`; the serial-tier run passed that case | The test double does not reliably model atomic consumption. This observation does not establish whether the production coordinator has the same race |
+| The displayed “QR Code” is not a complete QR encoder | `createLocalQrSvgElement` in `scripts/client_template.mjs` repeats input bits into a fixed matrix with finder-like patterns, without QR data framing, error correction or format/version encoding. The browser test checks SVG presence, not successful decoding | Do not advertise scan interoperability. Use copied/SMS links pending a real encoder and decoder-based acceptance check; no camera decode was performed in this review |
+| V2 receipt fields are not all mandatory | `verifyReceiptSignatureInWorker`, browser `verifyReceiptSignature` and the recipient reveal path accept legacy signed layouts; delivery-signature and envelope-commitment checks run only when the relevant fields exist. A test-key probe confirmed verifier acceptance with those v2 fields absent | Local signature success alone is not proof that every advertised v2 delivery/integrity field was required. Review the intended receipt schema separately |
+| Browser and Worker payload limits differ | Sender checks 1–512 UTF-8 bytes; `validateAndCanonicalizeEnvelopeV2` accepts 17–700 decoded ciphertext bytes and at most 1536 serialized envelope bytes | A direct client can submit more than the browser limit. A synthetic 513-byte equivalent was accepted by the validator |
+| Five-minute session expiry is checked on use, not by timed erasure | `initRecipientFragmentAndSession` and `performDirectBrowserReveal` compare `saved_at_ms`; no five-minute cleanup timer is installed | Do not promise that idle tab storage is physically cleared at precisely five minutes. Long embargo waits require reopening the original link |
+| Older device/model UAT tooling still assumes the old workflow | `scripts/run_s21_deterministic_uat.mjs` expects a blank sender PIN to succeed and zero same-origin claim requests; model/config paths omit explicit credentials/PIN and construct fragment-free claims | The rewritten UAT plan describes current acceptance criteria; these older runners are not certified implementations of it |
+| Optional Cloud Run browser actions do not form a working paired handoff | `cloudrun-reflector/server.mjs` `browser_seal` uses the normal browser's fresh random key but removes the fragment from its returned URL; `browser_claim` appends the fixed synthetic key | Do not claim those actions validate arbitrary browser-created shares end to end. Use protocol-synthetic checks or the local browser E2E case pending a separate tooling repair |
+| Sample-demo label is not enforced timing | `sample-demo-btn` calls `executeSenderSeal(true)` with the currently selected embargo | “Run 45s Sample Demo” is a button label, not a guaranteed 45-second delay |
+| Test summaries depend on the reporter | `tests/e2e/runner.mjs` parses TAP counters; this Node environment selected spec output by default | Use explicit TAP and exit status for reliable counts |
 
-# Tier 2: Boundary Value Analysis (18 tests)
-node tests/e2e/runner.mjs --tier=2
+The synthetic reflector also accepts a caller-supplied escrow ID/PIN without proving that the ID belongs to an internally created diagnostic. Its fixed-key decryption can fail **after upstream consumption** if misused on another share. Keep real shares away from all reflector actions; the input-field restrictions are not a synthetic-share ownership check.
 
-# Tier 3: Pairwise Combinations (8 tests)
-node tests/e2e/runner.mjs --tier=3
+## What remains unverified
 
-# Tier 4: Real-World Scenarios (7 tests)
-node tests/e2e/runner.mjs --tier=4
-```
-
----
-
-## 3. Test Results Summary
-
-```
-================================================================
-       SecretSender E2E Opaque-Box Test Suite Runner             
-================================================================
-Execution Mode: Full 4-Tier Regression Suite
-Node Runtime  : v22.13.1
-Target Suite  : T1, T2, T3, T4
-----------------------------------------------------------------
-
-[RUNNING] Tier 1: Core Feature Coverage (tier1_features.test.mjs)... PASS (29/29 tests, 353ms)
-[RUNNING] Tier 2: Boundary Value Analysis & Edge Cases (tier2_boundaries.test.mjs)... PASS (18/18 tests, 374ms)
-[RUNNING] Tier 3: Cross-Feature Pairwise Combinations (tier3_combinations.test.mjs)... PASS (8/8 tests, 1523ms)
-[RUNNING] Tier 4: Real-World Application Scenarios (tier4_scenarios.test.mjs)... PASS (7/7 tests, 1527ms)
-
-================================================================
-                     TEST EXECUTION SUMMARY                     
-================================================================
- ✔ PASS  [Tier 1] Tier 1: Core Feature Coverage                  29/29 tests (  353ms)
- ✔ PASS  [Tier 2] Tier 2: Boundary Value Analysis & Edge Cases   18/18 tests (  374ms)
- ✔ PASS  [Tier 3] Tier 3: Cross-Feature Pairwise Combinations     8/8  tests ( 1523ms)
- ✔ PASS  [Tier 4] Tier 4: Real-World Application Scenarios        7/7  tests ( 1527ms)
-----------------------------------------------------------------
- Total Suites  : 4
- Total Tests   : 62
- Passed Tests  : 62
- Failed Tests  : 0
- Total Time    : 3.78s
-================================================================
-✔ TEST SUITE PASSED: 100% of opaque-box contract assertions verified.
-```
-
----
-
-## 4. Feature Inventory Coverage Matrix (PROJECT.md Features 1-24)
-
-| Feature # | Feature Name | Test Tier | Test Module | Status |
-|:---:|:---|:---:|:---|:---:|
-| **1** | Single-Server Node Architecture | Tier 1 | `tests/e2e/tier1_features.test.mjs` | **VERIFIED** |
-| **2** | Static SVG Brand Asset Serving | Tier 1 | `tests/e2e/tier1_features.test.mjs` | **VERIFIED** |
-| **3** | BitBop Surface Palette & Patterns | Tier 1 | `tests/e2e/tier1_features.test.mjs` | **VERIFIED** |
-| **4** | BitBop Action & Telemetry Colors | Tier 1 | `tests/e2e/tier1_features.test.mjs` | **VERIFIED** |
-| **5** | BitBop Typography System | Tier 1 | `tests/e2e/tier1_features.test.mjs` | **VERIFIED** |
-| **6** | Responsive Admin View (S21) | Tier 1, 3 | `tests/e2e/tier1_features.test.mjs`, `tier3_combinations.test.mjs` | **VERIFIED** |
-| **7** | Responsive Claim View (S21) | Tier 1, 3 | `tests/e2e/tier1_features.test.mjs`, `tier3_combinations.test.mjs` | **VERIFIED** |
-| **8** | ML-KEM-768 & AES-256-GCM Core | Tier 1, 4 | `tests/e2e/tier1_features.test.mjs`, `tier4_scenarios.test.mjs` | **VERIFIED** |
-| **9** | ML-DSA-44 Post-Quantum Provenance | Tier 1, 4 | `tests/e2e/tier1_features.test.mjs`, `tier4_scenarios.test.mjs` | **VERIFIED** |
-| **10** | Timelock Embargo & Countdown | Tier 2, 3, 4 | `tests/e2e/tier2_boundaries.test.mjs`, `tier3_combinations.test.mjs`, `tier4_scenarios.test.mjs` | **VERIFIED** |
-| **11** | Zero Server Request Invariant | Tier 1, 4 | `tests/e2e/tier1_features.test.mjs`, `tier4_scenarios.test.mjs` | **VERIFIED** |
-| **12** | Error & Security Invariants | Tier 1, 2, 4 | `tests/e2e/tier1_features.test.mjs`, `tier2_boundaries.test.mjs`, `tier4_scenarios.test.mjs` | **VERIFIED** |
-| **13** | Native SMS Handoff Link | Tier 1, 3 | `tests/e2e/tier1_features.test.mjs`, `tier3_combinations.test.mjs` | **VERIFIED** |
-| **14** | Formal UAT Test Plan | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **15** | White-Box Flight Recorder Seam | Tier 3 | `tests/e2e/tier3_combinations.test.mjs` | **VERIFIED** |
-| **16** | Hardware S21 Connectivity & Tunnels | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **17** | Deterministic Playwright-over-ADB Suite | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **18** | Model-Driven UAT Persona Loop | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **19** | Machine-Readable UAT Reports | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **20** | Hop-by-Hop Protocol & Port Table | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **21** | Enterprise Security Controls Analysis | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **22** | Synchronous vs Store-and-Forward | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **23** | Compatibility Matrix & Recommendations | Tier 4 | `tests/e2e/tier4_scenarios.test.mjs` | **VERIFIED** |
-| **24** | E2E Testing Track & Final Verification | Tier 1-4 | `tests/e2e/runner.mjs` | **VERIFIED** |
-
----
-
-## 5. Artifact Directory Layout
-
-```
-c:\code\projects\SecretSender\
-├── TEST_INFRA.md                          # Methodology, principles, and coverage specification
-├── TEST_READY.md                          # Readiness publication (this document)
-├── package.json                           # Configured with "test": "node tests/e2e/runner.mjs"
-└── tests/
-    └── e2e/
-        ├── harness.mjs                    # Ephemeral server lifecycle & WebCrypto/ML-KEM helpers
-        ├── mock_bitbop_server.mjs         # High-fidelity mock BitBop Escrow API
-        ├── tier1_features.test.mjs        # Tier 1: 29 core feature tests
-        ├── tier2_boundaries.test.mjs      # Tier 2: 18 boundary & corner case tests
-        ├── tier3_combinations.test.mjs    # Tier 3: 8 pairwise cross-feature tests
-        ├── tier4_scenarios.test.mjs       # Tier 4: 7 real-world scenario tests
-        └── runner.mjs                     # CLI runner supporting --tier and summary reports
-```
+Current public deployment SHA/configuration; production browser behavior; upstream physical entropy quality; operational erasure beyond the service's recorded policy; external Cloud Run/hardware S21 UAT; and the compatibility of an independently selected current BitBop checkout. Use [TEST_INFRA.md](TEST_INFRA.md) and [docs/UAT_PLAN.md](docs/UAT_PLAN.md) for bounded follow-up verification.
